@@ -12,7 +12,7 @@ from sim.model_ftdi import FT245SyncModel, FT245_MODEL
 
 class TestBench(Module):
     INCOMING_DEPTH = 64
-    OUTPUT_DEPTH = 64
+    OUTPUT_DEPTH = 64 + 1
 
     def __init__(self):
         ftdi_io = Record(FT245_MODEL)
