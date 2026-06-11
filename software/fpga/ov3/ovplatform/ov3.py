@@ -110,3 +110,35 @@ TIMESPEC "TS{clk}" = PERIOD "GRP{clk}" %f ns HIGH 50%%;
 """ % period, clk=clk)
             except ConstraintError:
                 pass
+
+        # I/O constraints are necessary for the timing analyzer to report the
+        # pad-relative I/O slack (without constraints I/O paths are unchecked).
+        # PCB signal propagation is currently not included in I/O constraints.
+        # Build enforces minimum slack on all constrained nets to ensure that
+        # there is sufficient margin.
+
+        # USB334x Table 4-4: ULPI interface timing 60 MHz ULPI Output Clock
+        # Setup time (STP, data in)                  min 5 ns
+        # Hold time (STP, data in)                   min 0 ns
+        # Output delay (control out, 8-bit data out) min 1.5 ns max 6 ns
+        #
+        # ULPI period is 16.667 ns, therefore:
+        #   OUT clock-to-pad budget is:
+        #       period - 5 = 16.667 - 5 = 11.667 ns
+        #    IN data becomes valid PHY tco(max) = 6 ns after the edge and stays
+        #       valid until PHY tco(min) = 1.5 ns after following edge
+        #       OFFSET IN = period - 6 ns = 10.667 ns
+        #       VALID = (period - 6 ns) + 1.5 ns = 12.167
+        try:
+            ulpi = self.lookup_request("ulpi")
+            self.add_platform_command(
+"""
+NET "{stp}" OFFSET = OUT 11.667 AFTER "{clk}";
+NET "ulpi_d(*)" OFFSET = OUT 11.667 AFTER "{clk}";
+NET "{dir}" OFFSET = IN 10.667 VALID 12.167 BEFORE "{clk}";
+NET "{nxt}" OFFSET = IN 10.667 VALID 12.167 BEFORE "{clk}";
+NET "ulpi_d(*)" OFFSET = IN 10.667 VALID 12.167 BEFORE "{clk}";
+""", stp=ulpi.stp, dir=ulpi.dir, nxt=ulpi.nxt, clk=ulpi.clk)
+        except ConstraintError:
+            # Do not fail if bitstream never requests ulpi
+            pass
