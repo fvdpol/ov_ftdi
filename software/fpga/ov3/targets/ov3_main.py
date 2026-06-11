@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 
+# Main OV3 gateware: the full SoC that is used by host software (ovctl.py)
+
 from migen import *
 from migen.genlib.record import Record
 import misoc.interconnect.stream as al_fifo
 from misoc.interconnect.csr_bus import Interconnect, CSRBankArray
 
-import ovhw.clocking as clocking
+from targets.ov3_base import OV3BaseSoC
 from ovhw.sdramctl import SDRAMCTL
 from ovhw.sdram_mux import SDRAMMux
 from ovhw.sdram_bist import SDRAMBIST
 from ovhw.sdrambistcfg import SDRAMBISTCfg
-from ovhw.ulpi import ULPI_ctrl, ULPI_pl, ULPI_REG
+from ovhw.ulpi import ULPI_ctrl, ULPI_REG
 from ovhw.leds import LED_outputs
 from ovhw.buttons import BTN_status
 from ovhw.whacker.whacker import Whacker
 from ovhw.ovf_insert import OverflowInserter
 from ovhw.cmdproc import CmdProc
-from ovhw.ftdi_bus import FTDI_sync245
 from ovhw.ftdi_lfsr_test import FTDI_randtest
 from ovhw.ulpicfg import ULPICfg
 from ovhw.cfilt import RXCmdFilter
@@ -25,13 +26,11 @@ from ovhw.sdram_host_read import SDRAM_Host_Read
 from ovhw.sdram_sink import SDRAM_Sink
 import ovplatform.sdram_params
 
-# Top level platform module
-class OV3(Module):
-    def __init__(self, plat):
-        # Clocking
 
-        self.submodules.clockgen = clocking.ClockGen(plat)
-        self.clock_domains.cd_sys = self.clockgen.cd_sys
+# Top level integration: bridge all functionality together
+class OV3(OV3BaseSoC):
+    def __init__(self, plat):
+        super().__init__(plat)
 
         # SDRAM Controller
         sd_param = ovplatform.sdram_params.getSDRAMParams('mt48lc16m16a2')
@@ -39,8 +38,8 @@ class OV3(Module):
         # Build the SDRAM controller (TODO: Replace with MISOC SDRAM controller)
         self.submodules.sdramctl = SDRAMCTL(
             plat.request("sdram"),
-            clk_out=self.clockgen.clk_sdram,
-            clk_sample=self.clockgen.clk_sdram_sample,
+            clk_out=self.crg.clk_sdram,
+            clk_sample=self.crg.clk_sdram_sample,
             **sd_param._asdict()
         )
 
@@ -72,9 +71,7 @@ class OV3(Module):
         ulpi_fs_pre = Signal()
 
         # ULPI physical layer
-        self.submodules.ulpi_pl = ULPI_pl(
-            plat.request("ulpi"), ulpi_cd_rst, ulpi_stp_ovr)
-        self.clock_domains.cd_ulpi = self.ulpi_pl.cd_ulpi
+        self.add_ulpi_pl(plat.request("ulpi"), ulpi_cd_rst, ulpi_stp_ovr)
 
         # ULPI controller
         ulpi_reg = Record(ULPI_REG)
@@ -108,9 +105,7 @@ class OV3(Module):
                 ]
 
         # FTDI bus interface
-        ftdi_io = plat.request("ftdi")
-        self.submodules.ftdi_bus = ftdi_bus = FTDI_sync245(self.clockgen.cd_sys.rst,
-                ftdi_io)
+        self.add_ftdi_bus(plat.request("ftdi"))
 
         # FTDI command processor
         self.submodules.randtest = FTDI_randtest()

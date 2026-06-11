@@ -1,6 +1,15 @@
-from migen import *
+#!/usr/bin/env python3
+"""Shared OV3 board base.
 
-class ClockGen(Module):
+Contains clock and reset generator that shall be common to every OV3 bitstream.
+"""
+
+from migen import *
+from ovhw.ftdi_bus import FTDI_sync245
+from ovhw.ulpi import ULPI_pl
+
+
+class _CRG(Module):
     def __init__(self, platform):
         clkin = platform.request("clk12") # 12mhz reference clock from which all else is derived
 
@@ -91,3 +100,64 @@ INST "{bufio2}" LOC = "BUFIO2_X1Y1";
             self.cd_rst.rst.eq(~self.pll_locked),
             self.cd_sys.clk.eq(self.clk_sys),
         ]
+
+
+class OV3BaseSoC(Module):
+    def __init__(self, plat):
+        # Clocking
+        self.submodules.crg = _CRG(plat)
+        self.clock_domains.cd_sys = self.crg.cd_sys
+
+    def _connect_ulpi(self, ulpi_pins, ulpi_pl):
+        self.comb += [
+            ulpi_pins.rst.eq(ulpi_pl.rst),
+            ulpi_pins.stp.eq(ulpi_pl.stp),
+            ulpi_pl.nxt.eq(ulpi_pins.nxt),
+            ulpi_pl.dir.eq(ulpi_pins.dir),
+        ]
+        ulpi_dq = TSTriple(8)
+        self.specials += ulpi_dq.get_tristate(ulpi_pins.d)
+        self.comb += [
+            ulpi_dq.o.eq(ulpi_pl.d_o),
+            ulpi_dq.oe.eq(ulpi_pl.d_oe),
+            ulpi_pl.d_i.eq(ulpi_dq.i),
+        ]
+
+    def add_ulpi_pl(self, ulpi_pins, ulpi_cd_rst, ulpi_stp_ovr):
+        # ULPI clock domain (driven by USB3343 PHY).
+        self.clock_domains.cd_ulpi = ClockDomain()
+        self.cd_ulpi.clk = ulpi_pins.clk
+        self.cd_ulpi.rst = ulpi_cd_rst
+
+        # Instantiate ULPI physical layer logical adapter and connect signals
+        self.submodules.ulpi_pl = ULPI_pl(ulpi_stp_ovr)
+        self._connect_ulpi(ulpi_pins, self.ulpi_pl)
+        return self.ulpi_pl
+
+    def _connect_ftdi(self, ftdi_pins, ftdi_bus):
+        self.comb += [
+            ftdi_bus.rxf_n.eq(ftdi_pins.rxf_n),
+            ftdi_bus.txe_n.eq(ftdi_pins.txe_n),
+            ftdi_pins.siwua_n.eq(ftdi_bus.siwua_n),
+            ftdi_pins.rd_n.eq(ftdi_bus.rd_n),
+            ftdi_pins.oe_n.eq(ftdi_bus.oe_n),
+            ftdi_pins.wr_n.eq(ftdi_bus.wr_n),
+        ]
+        ftdi_dq = TSTriple(8)
+        self.specials += ftdi_dq.get_tristate(ftdi_pins.d)
+        self.comb += [
+            ftdi_dq.o.eq(ftdi_bus.d_o),
+            ftdi_dq.oe.eq(ftdi_bus.d_oe),
+            ftdi_bus.d_i.eq(ftdi_dq.i),
+        ]
+
+    def add_ftdi_bus(self, ftdi_pins):
+        # FTDI clock domain (driven by FT2232H)
+        self.clock_domains.cd_ftdi = ClockDomain()
+        self.cd_ftdi.clk = ftdi_pins.clk
+        self.cd_ftdi.rst = self.crg.cd_sys.rst
+
+        # Instantiate FTDI bus controller and connect signals
+        self.submodules.ftdi_bus = ftdi_bus = FTDI_sync245()
+        self._connect_ftdi(ftdi_pins, ftdi_bus)
+        return ftdi_bus

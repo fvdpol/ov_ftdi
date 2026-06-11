@@ -4,8 +4,30 @@ from migen.genlib.fsm import *
 from migen.genlib.fifo import *
 
 class FTDI_sync245(Module):
-    def __init__(self, reset, io):
-        #rst = Signal()
+    def __init__(self):
+        # FTDI controller uses unidirectional logical interface that allows
+        # simulation testing with Migen simulator.
+
+        # SoC should connect all outputs and inputs using combinational logic,
+        # i.e. without registering.
+
+        # SoC must instantiate a vendor-specific tri-state buffer for data.
+        # When d_oe = 1, d_o drives FTDI data bus.
+        # When d_oe = 0, d_i samples FTDI data bus.
+        self.d_oe = Signal(reset=0)
+
+        # Controller outputs (controller -> SoC -> FTDI)
+        self.d_o = Signal(8)           # Data to drive on bidirectional bus
+        self.rd_n = Signal(reset=1)    # RD#
+        self.oe_n = Signal(reset=1)    # OE#
+        self.wr_n = Signal(reset=1)    # WR#
+        self.siwua_n = Signal(reset=1)
+
+        # Controller inputs (FTDI -> SoC -> controller)
+        self.d_i = Signal(8)           # Data read from the bus
+        self.rxf_n = Signal(reset=1)   # RXF#
+        self.txe_n = Signal(reset=1)   # TXE#
+
 
         # Input FIFO for reads from FT245
         self.incoming_fifo = incoming_fifo = AsyncFIFO(8, 64)
@@ -17,26 +39,7 @@ class FTDI_sync245(Module):
         self.submodules.outgoing = ClockDomainsRenamer(
             {"write":"sys", "read":"ftdi"})(output_fifo)
 
-        ftdi_domain = ClockDomain("ftdi")
-        ftdi_domain.rst = reset
-        ftdi_domain.clk = io.clk
-        # Hack
-        ftdi_domain.rename("ftdi")
-
-        self.clock_domains.cd_ftdi = ftdi_domain
-
-        # Shared control
-        # Databus is driven by both the FPGA and the FTDI
-        # We use a tristate that is initially hi-z
-        self.dbus = dbus = TSTriple(8)
-        dbus.oe.reset = 0
-        assert io.d.nbits == 8
-        self.specials += dbus.get_tristate(io.d)
-
-        io.wr_n.reset = 1
-        io.rd_n.reset = 1
-        io.oe_n.reset = 1
-        self.comb += io.siwua_n.eq(1)
+        self.comb += self.siwua_n.eq(1)
 
         next_RD = Signal(reset=0)
         next_WR = Signal(reset=0)
@@ -45,9 +48,9 @@ class FTDI_sync245(Module):
 
         # Use registers for all IOs to help timing
         self.sync.ftdi += [
-            io.rd_n.eq(~next_RD | io.rxf_n),
-            io.oe_n.eq(~next_OE),
-            dbus.oe.eq(next_dOE),
+            self.rd_n.eq(~next_RD | self.rxf_n),
+            self.oe_n.eq(~next_OE),
+            self.d_oe.eq(next_dOE),
             ]
 
 
@@ -57,14 +60,14 @@ class FTDI_sync245(Module):
         can_write = Signal()
 
         # Try a write whenever we have data in the fifo
-        self.comb += can_write.eq(~io.txe_n & output_fifo.readable)
+        self.comb += can_write.eq(~self.txe_n & output_fifo.readable)
 
         # Try a read whenever we have data in the FTDI fifo and nothing in the IC fifo
         can_read = Signal()
         self.comb += [
-                can_read.eq(~io.rxf_n & incoming_fifo.writable),
-                incoming_fifo.din.eq(dbus.i),
-                dbus.o.eq(output_fifo.dout)]
+                can_read.eq(~self.rxf_n & incoming_fifo.writable),
+                incoming_fifo.din.eq(self.d_i),
+                self.d_o.eq(output_fifo.dout)]
 
         bsf.act('IDLE',
             # Reads from FTDI take priority over writes
@@ -93,11 +96,11 @@ class FTDI_sync245(Module):
         bsf.act('WRITE',
                 If(~can_write,
                     NextState('W2I'),
-                    io.wr_n.eq(1),
+                    self.wr_n.eq(1),
                     next_dOE.eq(0),
                     output_fifo.re.eq(0)
                 ).Else(
-                    io.wr_n.eq(0),
+                    self.wr_n.eq(0),
                     next_dOE.eq(1),
                     output_fifo.re.eq(1),
                     next_WR.eq(1),
@@ -134,5 +137,5 @@ class FTDI_sync245(Module):
         self.tx_ind = Signal()
         self.rx_ind = Signal()
 
-        self.specials += MultiReg(~io.wr_n, self.tx_ind)
-        self.specials += MultiReg(~io.rd_n, self.rx_ind)
+        self.specials += MultiReg(~self.wr_n, self.tx_ind)
+        self.specials += MultiReg(~self.rd_n, self.rx_ind)

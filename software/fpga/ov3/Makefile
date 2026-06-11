@@ -1,25 +1,49 @@
+PYTHON := python3
 PYTHONPATH := ../migen:../misoc
 export PYTHONPATH
 OVCTL := ../../host/ovctl.py
-BUILD := build
-TOP := ov3
-BITFILE := $(BUILD)/$(TOP).bit
-FWPKG := $(BUILD)/$(TOP).fwpkg
 
-PYTHON := python3
+PY_FILES := $(shell find ovhw ovplatform targets -name '*.py')
 
-PY_FILES := $(shell find ovhw ovplatform -name '*.py')
+MAIN_TARGET := ov3
+TARGETS := ov3
 
-all: $(BITFILE) $(FWPKG)
+# Arbitrarily chosen minimum slack required to account for PCB traces
+MIN_SLACK := 0.3
 
-$(FWPKG): $(BITFILE)
-	$(PYTHON) -m zipfile -c $@ $< $(BUILD)/map.txt
+.DELETE_ON_ERROR:
+.PHONY: main all clean test testall run
 
-$(BITFILE): $(PY_FILES)
-	$(PYTHON) build.py -d $(BUILD) -n $(TOP)
+main: $(MAIN_TARGET)
+all: $(TARGETS)
+
+build_dir = $(if $(filter $1,$(MAIN_TARGET)),build,build_$1)
+bitfile   = $(call build_dir,$1)/$1.bit
+fwpkgfile = $(call build_dir,$1)/$1.fwpkg
+
+define TARGET_RULES
+
+$(call bitfile,$1): $(PY_FILES)
+	$$(PYTHON) build.py --target $1 -d $(call build_dir,$1) -n $1 \
+	--min-slack $$(MIN_SLACK)
+
+$(call fwpkgfile,$1): $(call bitfile,$1)
+	$(PYTHON) -m zipfile -c $$@ $$< $(call build_dir,$1)/map.txt
+
+.PHONY: $1
+
+# User-facing build target
+$1: $(call bitfile,$1)
+
+endef
+
+$(foreach t,$(TARGETS),$(eval $(call TARGET_RULES,$t)))
+
+# For main target, additionally build fwpkg
+$(MAIN_TARGET): $(call fwpkgfile,$(MAIN_TARGET))
 
 clean:
-	rm -rf $(BUILD)/*
+	rm -rf $(foreach t,$(TARGETS),$(call build_dir,$t))
 
 # Full test of tests anywhere in source tree, including basic sanity
 # tests on per-module basis
@@ -30,5 +54,5 @@ testall:
 test:
 	nosetests3 sim -v
 
-run: $(OVCTL) $(BITFILE)
-	$(OVCTL) -C -b $(BITFILE) none
+run: $(OVCTL) $(call bitfile,$(MAIN_TARGET))
+	$(OVCTL) -C -b $(call bitfile,$(MAIN_TARGET)) none

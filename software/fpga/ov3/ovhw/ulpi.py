@@ -43,31 +43,40 @@ def pid_compare(first_byte, pid):
 
 class ULPI_pl(Module):
     """
-    ULPI Physical layer interface. Connects internal unidirectional busses to
-    bidirectional ULPI interface. Instantiated as as separate module to allow
+    ULPI Physical layer interface. Connects internal unidirectional buses to
+    bidirectional ULPI interface. Instantiated as a separate module to allow
     simulation testing of unidirectional controller
     """
-    def __init__(self, ulpi_pins, ulpi_cd_rst=0, stp_ovr=0):
-        self.clock_domains.cd_ulpi = ClockDomain()
-        self.cd_ulpi.clk = ulpi_pins.clk
-        self.cd_ulpi.rst = ulpi_cd_rst
-
+    def __init__(self, stp_ovr=0):
         self.ulpi_bus = ulpi_bus = Record(ULPI_BUS)
 
-        # CTRL->PHY
-        self.comb += ulpi_pins.rst.eq(~ulpi_bus.rst)
-        self.comb += ulpi_pins.stp.eq(ulpi_bus.stp | stp_ovr)
+        # SoC should connect all outputs and inputs using combinational logic,
+        # i.e. without registering.
 
-        # PHY->CTRL
-        self.comb += ulpi_bus.nxt.eq(ulpi_pins.nxt)
-        self.comb += ulpi_bus.dir.eq(ulpi_pins.dir)
+        # SoC must instantiate a vendor-specific tri-state buffer for data.
+        # When d_oe = 1, d_o drives ULPI data bus.
+        # When d_oe = 0, d_i samples ULPI data bus.
+        self.d_oe = Signal()
 
-        # BIDIR
-        dq = TSTriple(8)
-        self.specials += dq.get_tristate(ulpi_pins.d)
-        self.comb += ulpi_bus.di.eq(dq.i)
-        self.comb += dq.o.eq(ulpi_bus.do)
-        self.comb += dq.oe.eq(ulpi_bus.doe)
+        # Controller outputs (controller -> SoC -> ULPI PHY)
+        self.d_o = Signal(8)     # Data to drive on bidirectional bus
+        self.rst = Signal()      # ULPI RST# (active-low)
+        self.stp = Signal()
+
+        # Controller inputs (ULPI PHY -> SoC -> controller)
+        self.d_i = Signal(8)     # Data read from the bus
+        self.nxt = Signal()
+        self.dir = Signal()
+
+        self.comb += [
+            self.rst.eq(~ulpi_bus.rst),
+            self.d_o.eq(ulpi_bus.do),
+            self.d_oe.eq(ulpi_bus.doe),
+            self.stp.eq(ulpi_bus.stp | stp_ovr),
+            ulpi_bus.nxt.eq(self.nxt),
+            ulpi_bus.dir.eq(self.dir),
+            ulpi_bus.di.eq(self.d_i),
+        ]
 
 
 class ULPI_ctrl(Module):
