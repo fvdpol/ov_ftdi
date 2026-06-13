@@ -142,3 +142,30 @@ NET "ulpi_d(*)" OFFSET = IN 10.667 VALID 12.167 BEFORE "{clk}";
         except ConstraintError:
             # Do not fail if bitstream never requests ulpi
             pass
+
+        # FT2232H 4.4 FT245 Synchronous FIFO Interface Mode Description
+        # All signals are synchronous on 60 MHz CLKOUT (ftdi.clk) rising edge.
+        #
+        # FTDI inputs (OE#, RD#, WR#, data) require Setup min 8 ns, Hold 0 ns
+        # OUT clock-to-pad budget is: period - 8 ns = 16.67 ns - 8 ns = 8.67 ns
+        #
+        # FTDI outputs (RXF#, TXE#, data) become valid 7.15 ns after the edge
+        # but not sooner than 1 ns after the edge.
+        # OFFSET IN = period - 7.15 ns = 9.52 ns
+        # VALID = (period - 7.15 ns) + 1 ns = 10.52 ns
+        try:
+            ftdi = self.lookup_request("ftdi")
+            self.add_platform_command(
+"""
+NET "{rxf_n}" OFFSET = IN 9.52 VALID 10.52 BEFORE "{clk}";
+NET "{txe_n}" OFFSET = IN 9.52 VALID 10.52 BEFORE "{clk}";
+NET "ftdi_d(*)" OFFSET = IN 9.52 VALID 10.52 BEFORE "{clk}";
+NET "{rd_n}" OFFSET = OUT 8.67 AFTER "{clk}";
+NET "{wr_n}" OFFSET = OUT 8.67 AFTER "{clk}";
+NET "{oe_n}" OFFSET = OUT 8.67 AFTER "{clk}";
+NET "ftdi_d(*)" OFFSET = OUT 8.67 AFTER "{clk}";
+""", rxf_n=ftdi.rxf_n, txe_n=ftdi.txe_n, rd_n=ftdi.rd_n,
+     wr_n=ftdi.wr_n, oe_n=ftdi.oe_n, clk=ftdi.clk)
+        except ConstraintError:
+            # Do not fail if bitstream never requests ftdi
+            pass
