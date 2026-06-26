@@ -30,9 +30,7 @@ class OV3(Module):
     def __init__(self, plat):
         # Clocking
 
-        clk_ref = plat.request("clk12") # 12mhz reference clock from which all else is derived
-
-        self.submodules.clockgen = clocking.ClockGen(clk_ref)
+        self.submodules.clockgen = clocking.ClockGen(plat)
         self.clock_domains.cd_sys = self.clockgen.cd_sys
 
         # SDRAM Controller
