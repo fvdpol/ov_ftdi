@@ -1,5 +1,6 @@
 from ovplatform.ov3 import Platform
 from targets.ov3_main import OV3
+from targets.ov3_ftdi_tests import FTDILoopback, FTDITXRamp
 import check_timing
 
 import sys
@@ -15,6 +16,8 @@ import subprocess
 # Buildable tops (FPGA bitstreams)
 TARGETS = {
     'ov3': OV3,
+    'ftdi_loopback': FTDILoopback,
+    'ftdi_txramp': FTDITXRamp,
 }
 
 
