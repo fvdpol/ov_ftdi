@@ -53,9 +53,9 @@ class FTDI_sync245(Module):
 
 
         bsf = FSM()
-        
+
         can_write = Signal()
-                
+
         # Try a write whenever we have data in the fifo
         self.comb += can_write.eq(~io.txe_n & output_fifo.readable)
 
@@ -65,19 +65,19 @@ class FTDI_sync245(Module):
                 can_read.eq(~io.rxf_n & incoming_fifo.writable),
                 incoming_fifo.din.eq(dbus.i),
                 dbus.o.eq(output_fifo.dout)]
-        
+
         bsf.act('IDLE',
             # Reads from FTDI take priority over writes
             # Host must throttle reads to prevent overusage of bus BW
             If(can_read, NextState('READ'),
                 next_OE.eq(1))
-            .Elif(can_write, 
+            .Elif(can_write,
                 NextState('I2W'),
                 next_OE.eq(0)
             ))
 
         bsf.act('I2W',
-            If(~can_write, 
+            If(~can_write,
                 NextState('IDLE'),
                 next_dOE.eq(0)
             ).Else(
@@ -87,7 +87,7 @@ class FTDI_sync245(Module):
                 output_fifo.re.eq(0),
                 NextState('WRITE')
             )
-            
+
         )
 
         bsf.act('WRITE',
@@ -125,7 +125,7 @@ class FTDI_sync245(Module):
 
         bsf.finalize()
         bsf.state.reset = bsf.encoding['IDLE']
-        
+
 
         self.submodules.bsf = ClockDomainsRenamer({"sys": "ftdi"})(bsf)
 

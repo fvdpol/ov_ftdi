@@ -9,8 +9,8 @@ from misoc.interconnect.csr_bus import Interface
 # CSR Port (master)
 # Trans_init
 #
-# 
-# 
+#
+#
 # Trans_complete
 
 CMD_REC = [('wr', 1), ('a', 14), ('d', 8)]
@@ -27,14 +27,14 @@ class CSR_Master(Module):
 
         self.busy = Signal()
 
-        self.comb += [ 
+        self.comb += [
                 self.cmd.ack.eq(0)
                 ]
 
         samp_comp = Signal()
 
         if has_completion:
-            self.sync += If(self.cmd.ack, 
+            self.sync += If(self.cmd.ack,
                     self.completion.payload.a.eq(self.cmd.payload.a),
                     self.completion.payload.wr.eq(self.cmd.payload.wr),
                     If(self.cmd.payload.wr,

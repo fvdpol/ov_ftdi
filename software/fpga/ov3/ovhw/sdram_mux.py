@@ -23,11 +23,7 @@ class SDRAMMux(Module):
         busy = Signal()
         adj_last = Signal()
 
-
-        
-
         granted = self.rr.grant
-
 
         terms = 0
 

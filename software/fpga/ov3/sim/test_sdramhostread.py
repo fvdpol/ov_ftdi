@@ -17,12 +17,12 @@ class TestBench(Module):
         hostif = self.mux.getPort()
         self.submodules.sdram_host_read = SDRAM_Host_Read(hostif, host_burst_length)
         self.host_burst_length = host_burst_length
-        
+
         self.hostif = hostif
         self.wait_for_i = False
-        
+
         self.sync += self.sdram_host_read.source.ack.eq(1)
-        
+
         self.hostif_sink = self.mux.getPort()
 
         self.submodules.dummy0 = DummySource(0xe0, dummy_data, dummy_idle)
@@ -31,17 +31,17 @@ class TestBench(Module):
         self.comb += self.sdram_host_read.wptr.eq(self.sdram_sink.wptr)
         self.comb += self.sdram_sink.rptr.eq(self.sdram_host_read.rptr)
         self.comb += self.dummy0.source.connect(self.sdram_sink.sink)
-        
+
         def expected():
             while True:
                 yield 0xE0
                 yield 0xE1
                 for i in range(301):
                     yield i & 0xFF
-        
+
         self.exp = expected()
         self.pkt = []
-    
+
     def do_simulation(self, selfp):
         if selfp.hostif.i_stb:
             self.wait_for_i = True
@@ -52,7 +52,7 @@ class TestBench(Module):
 #            print("cycle %d %d %02x %d" % (selfp.simulator.cycle_counter, selfp.sdram_host_read.source.stb, selfp.sdram_host_read.source.payload.d, selfp.sdram_host_read.source.payload.last))
             self.pkt.append(selfp.sdram_host_read.source.payload.d)
             assert selfp.sdram_host_read.source.payload.last == (len(self.pkt) == self.host_burst_length * 2 + 1)
-            
+
             if selfp.sdram_host_read.source.payload.last:
                 print(self.pkt)
                 assert self.pkt[0] == 0xD0
@@ -60,7 +60,7 @@ class TestBench(Module):
                     n = next(self.exp)
                     assert r == n, "expected %02x, read %02x in %r" % (n, r, self.pkt)
                 self.pkt = []
-            
+
         if selfp.simulator.cycle_counter == 1000:
             ring_start = 1*1024*1024
             ring_end = ring_start + 1024
@@ -89,10 +89,10 @@ class SDRAMHostReadTest(sim.sdram_test_util.SDRAMUTFramework, unittest.TestCase)
 
         runner = icarus.Runner(extra_files=files)
         vcd = "test_%s.vcd" % self.__class__.__name__
-        self.sim = Simulator(self.tb, TopLevel(vcd), sim_runner=runner) 
+        self.sim = Simulator(self.tb, TopLevel(vcd), sim_runner=runner)
         with self.sim:
             self.sim.run(10000)
-    
+
     def test_sdram_host_read(self):
         self._run(300, 1000, 256, 16)
 
@@ -107,4 +107,3 @@ class SDRAMHostReadTest(sim.sdram_test_util.SDRAMUTFramework, unittest.TestCase)
 
 if __name__ == "__main__":
     unittest.main()
-     

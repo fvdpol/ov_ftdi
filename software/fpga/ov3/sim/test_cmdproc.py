@@ -25,12 +25,12 @@ class TestBench(Module):
         self.ff.output_fifo.we = Signal()
         self.ff.output_fifo.writable = Signal(reset=1)
         self.ff.output_fifo.din = Signal(8)
-        
+
         self.submodules.dummy0 = DummySource(0xE0)
         self.submodules.dummy1 = DummySource(0xE8)
-        
+
         self.submodules.cm = self.cm = CmdProc(self.ff, [self.dummy0, self.dummy1])
-    
+
 
     def do_simulation(self, selfp):
         self.selfp = selfp
@@ -53,7 +53,7 @@ class TestCmdproc(unittest.TestCase):
         def do_outbound_fifo_rd(o):
             yield o.writable.eq(1)
             while (yield o.we) == 0:
-                yield 
+                yield
 
             v = yield o.din
             yield o.writable.eq(0)
@@ -66,13 +66,13 @@ class TestCmdproc(unittest.TestCase):
 
             while (yield o.re) == 0:
                 yield
-            
+
             yield
             yield o.readable.eq(0)
 
         def gen():
             for i in range(5):
-                yield 
+                yield
 
             yield from do_income_fifo_wr(self.tb.ff.incoming_fifo, 0x55)
             yield from do_income_fifo_wr(self.tb.ff.incoming_fifo, 0x92)
@@ -81,7 +81,7 @@ class TestCmdproc(unittest.TestCase):
             yield from do_income_fifo_wr(self.tb.ff.incoming_fifo, 0xAA)
 
             for i in range(10):
-                yield 
+                yield
 
             self.assertEqual(write_transactions, [(0x1234, 0x56)])
 
@@ -91,4 +91,3 @@ class TestCmdproc(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-        

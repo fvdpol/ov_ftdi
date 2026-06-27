@@ -3,7 +3,7 @@ from migen.genlib.cdc import MultiReg
 from misoc.interconnect.csr import CSR, AutoCSR
 
 # Button status register of layout:
-#    
+#
 #   L3 L2 L1 L0 S3 S2 S1 S0
 #
 #   Lx bits are latched button status bits,

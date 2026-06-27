@@ -21,7 +21,7 @@ $(BITFILE): $(PY_FILES)
 clean:
 	rm -rf $(BUILD)/*
 
-# Full test of tests anywhere in source tree, including basic sanity 
+# Full test of tests anywhere in source tree, including basic sanity
 # tests on per-module basis
 testall:
 	nosetests3 --all-modules -v

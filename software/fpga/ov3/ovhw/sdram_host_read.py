@@ -141,7 +141,7 @@ class SDRAM_Host_Read(Module, AutoCSR):
         self.comb += If(wrap, rptr_next.eq(self._ring_base.storage)).Else(rptr_next.eq(self.rptr + 1))
 
         self.sync += \
-            If(go &~ gor, 
+            If(go &~ gor,
                 rptr.eq(self._ring_base.storage),
             ).Elif((hostif.d_stb &~hostif.d_term) | (wrap & ~blocked),
                 rptr.eq(rptr_next))
@@ -153,7 +153,7 @@ class SDRAM_Host_Read(Module, AutoCSR):
 
         self.submodules.host_write_fsm = FSM()
 
-        burst_rem = Signal(max = host_burst_length) 
+        burst_rem = Signal(max = host_burst_length)
         burst_rem_next = Signal(max = host_burst_length)
 
         self.comb += burst_rem_next.eq(burst_rem)
@@ -201,7 +201,7 @@ class SDRAM_Host_Read(Module, AutoCSR):
             self.source.payload.last.eq(burst_rem == 0),
             self.source.stb.eq(1),
             sdram_fifo.re.eq(self.source.ack),
-            If (self.source.ack, 
+            If (self.source.ack,
                 If (burst_rem != 0,
                     NextState("SEND_DATA_ODD"),
                     burst_rem_next.eq(burst_rem - 1)

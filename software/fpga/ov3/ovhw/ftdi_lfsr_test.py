@@ -24,7 +24,7 @@ class FTDI_randtest(Module, AutoCSR):
             ).Else(
                 self.lfsr_state.eq(self.lfsr_state_next)
                 )
-        
+
         self.bytecount = Signal(8)
         self.bytecount_next = Signal(8)
         self.comb += [
@@ -36,10 +36,10 @@ class FTDI_randtest(Module, AutoCSR):
 
         self.submodules.fsm = FSM()
 
-        self.fsm.act("IDLE", 
+        self.fsm.act("IDLE",
                 If(self._cfg.storage[0], NextState("SEND_HEAD")))
 
-        self.fsm.act("SEND_HEAD", 
+        self.fsm.act("SEND_HEAD",
                 self.source.payload.d.eq(0xAA),
                 self.source.stb.eq(1),
                 If(self.source.ack,
@@ -63,9 +63,9 @@ class FTDI_randtest(Module, AutoCSR):
                 If(self.source.ack,
                     self.lfsr_state_next.eq(
                         Cat(
-                            self.lfsr_state[16] ^ 
-                            self.lfsr_state[14] ^ 
-                            self.lfsr_state[13] ^ 
+                            self.lfsr_state[16] ^
+                            self.lfsr_state[14] ^
+                            self.lfsr_state[13] ^
                             self.lfsr_state[11], self.lfsr_state)
                         ),
                     self.bytecount_next.eq(self.bytecount + 1),
@@ -115,7 +115,7 @@ class TestRandom(Module):
             #s.wr(self.tr._cfg.storage, 0)
         selfp.ff.incoming_fifo.dout = selfp.ff.incoming_fifo.dout
 
-        
+
 if __name__ == "__main__":
     from migen.sim.generic import Simulator, TopLevel
 

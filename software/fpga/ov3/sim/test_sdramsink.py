@@ -17,12 +17,12 @@ class TestBench(Module):
         #self.submodules.sdramhostread = SDRAM_Host_Read(hostif)
         self.submodules.dummy0 = DummySource(0xe0)
         self.submodules.sdram_sink = SDRAM_Sink(hostif)
-        
+
         self.comb += self.dummy0.source.connect(self.sdram_sink.sink)
 
         self.hostif = hostif
         self.wait_for_i = False
-        
+
     def do_simulation(self, selfp):
         if selfp.hostif.i_stb:
             self.wait_for_i = True
@@ -45,15 +45,14 @@ class SDRAMSinkTest(sim.sdram_test_util.SDRAMUTFramework, unittest.TestCase):
 
         runner = icarus.Runner(extra_files=files)
         vcd = "test_%s.vcd" % self.__class__.__name__
-        self.sim = Simulator(self.tb, TopLevel(vcd), sim_runner=runner) 
+        self.sim = Simulator(self.tb, TopLevel(vcd), sim_runner=runner)
 
     def _run(self):
         with self.sim:
             self.sim.run(10000)
-    
+
     def test_sdramsink(self):
         self._run()
 
 if __name__ == "__main__":
     unittest.main()
-     

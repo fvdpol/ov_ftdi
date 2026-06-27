@@ -19,7 +19,7 @@ class SDRAMSingleTester(sim.sdram_test_util.SDRAMUTFramework):
 
         with self.sim as sim:
             sim.run(n)
-        
+
     def tearDown(self):
         self.assertTrue(self.master.complete)
 

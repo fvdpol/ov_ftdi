@@ -31,7 +31,7 @@ def sdramHostIf(dw, aw):
         # Data "strobe". For read cycles, indicates data is present and fresh this cycle
         # For write cycles, indicates that data present on d_write was latched and new
         # data should be asserted
-        ("d_stb", 1, DIR_S_TO_M),     
+        ("d_stb", 1, DIR_S_TO_M),
 
         # Indicates that the master wishes to terminate the stream.
         # d_stb will not reassert. For reads, the host may keep the data
@@ -46,7 +46,7 @@ def sdramHostIf(dw, aw):
 
 """
 
-An example transfer: 
+An example transfer:
 
 - Write AD50, AD51, ..., ADB3 to address 000050, 000051, ..., 0000B3
 - Read back from 000055, ..., 000058
@@ -78,7 +78,7 @@ The d_stb de-assertions are arbitrary.
 ],
 ],
   {},
-  {name: 'clk',      wave: 'p...............|.....|.............', node:'.......................'}, 
+  {name: 'clk',      wave: 'p...............|.....|.............', node:'.......................'},
 ],
   edge: ['a~->b', 'c~->a', 'b~>d', 'e~>f'],
 }

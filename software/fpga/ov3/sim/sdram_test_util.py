@@ -96,7 +96,7 @@ class TestMaster(Module):
         self.p.hostif.d_term = 1
         yield from self.__d_step()
         self.p.hostif.d_term = 0
-    
+
     # Data pipe - handle a write stream
     def __d_write(self, buf):
         self.p.hostif.d_term = 0
@@ -173,7 +173,7 @@ class SDRAMTestSequences:
         yield from master.write_txn(s + 1, range(s+1, s + l - 1) )
         res = yield from master.read_txn(s, l)
 
-        self.assertEqual(res, 
+        self.assertEqual(res,
             [0xCAFE] + list(range(s+1, s+l-1)) + [0xCAFE])
 
     @mgen
@@ -206,4 +206,4 @@ class SDRAMUTFramework:
         runner = icarus.Runner(extra_files=files)
         #vcd = "test_%s.vcd" % self.__class__.__name__
         vcd = None
-        self.sim = Simulator(self.tb, TopLevel(None), sim_runner=runner) 
+        self.sim = Simulator(self.tb, TopLevel(None), sim_runner=runner)

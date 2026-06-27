@@ -3,13 +3,13 @@ from migen.genlib.record import Record
 from misoc.interconnect.stream import Endpoint
 from migen.genlib.fsm import FSM, NextState
 from migen.genlib.roundrobin import RoundRobin, SP_CE
-    
+
 from ovhw.csr_master import CMD_REC
 
 # Simple statemachine to turn incoming datastream
 # into CSR bus accesses
 
-# transactions into 
+# transactions into
 class BusDecode(Module):
     def __init__(self):
         self.busy=Signal()
@@ -37,15 +37,15 @@ class BusDecode(Module):
                     )))
 
         def parse_state(st, to, *update):
-            sm.act(st, 
+            sm.act(st,
                 self.sink.ack.eq(1),
                 If(self.sink.stb,
                     NextState(to),
                     *update
                     ))
 
-        parse_state('ADRH', 'ADRL', 
-                token_next.wr.eq(self.sink.payload.d[7]), 
+        parse_state('ADRH', 'ADRL',
+                token_next.wr.eq(self.sink.payload.d[7]),
                 token_next.a[8:14].eq(self.sink.payload.d[:6]))
 
         parse_state('ADRL', 'DATA',  token_next.a[0:8].eq(self.sink.payload.d)),
@@ -55,14 +55,14 @@ class BusDecode(Module):
                 self.sink.ack.eq(1),
                 If(self.sink.stb,
                         NextState('ISSUE')
-                )    
+                )
         )
 
         sm.act("ISSUE",
                 self.source.stb.eq(1),
                 If(self.source.ack,
                     NextState('IDLE')))
-                    
+
 
 class BusEncode(Module):
     def __init__(self):

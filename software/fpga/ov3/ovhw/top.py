@@ -56,10 +56,10 @@ class OV3(Module):
 
         # SDRAM host read translator
         self.submodules.sdram_host_read = SDRAM_Host_Read(self.sdram_mux.getPort(), host_burst_length = 0x20)
-        
+
         # SDRAM sink - sends data from USB capture to host
         self.submodules.sdram_sink = SDRAM_Sink(self.sdram_mux.getPort())
-        
+
         # connect wptr/rptr for ringbuffer flow control
         self.comb += self.sdram_host_read.wptr.eq(self.sdram_sink.wptr)
         self.comb += self.sdram_sink.rptr.eq(self.sdram_host_read.rptr)
@@ -72,12 +72,12 @@ class OV3(Module):
 
         # Automatic switch to Low-Speed on Full-Speed PRE
         ulpi_fs_pre = Signal()
-        
+
         # ULPI physical layer
         self.submodules.ulpi_pl = ULPI_pl(
             plat.request("ulpi"), ulpi_cd_rst, ulpi_stp_ovr)
         self.clock_domains.cd_ulpi = self.ulpi_pl.cd_ulpi
-        
+
         # ULPI controller
         ulpi_reg = Record(ULPI_REG)
         self.submodules.ulpi = ULPI_ctrl(self.ulpi_pl.ulpi_bus, ulpi_reg, ulpi_fs_pre)

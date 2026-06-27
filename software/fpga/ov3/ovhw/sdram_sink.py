@@ -106,7 +106,7 @@ class SDRAM_Sink(Module, AutoCSR):
 
         self.comb += hostif.d_write.eq(self.sdram_fifo.dout)
 
-        # stop writing if 
+        # stop writing if
         # - max burst length reached, or
         # - no more input data, or
         # - wrap

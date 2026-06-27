@@ -6,7 +6,7 @@ import sim.sdram_test_util
 @unittest.skip("TODO: Update to new Migen simulator")
 class SDRAMMultiTester(sim.sdram_test_util.SDRAMUTFramework):
     class TestBench(Module):
-        """ 
+        """
         Test module consisting of the Emulated SDRAM + Controller complex, and an
         SDRAM mux.
 
@@ -62,16 +62,16 @@ class SDRAMMultiTester(sim.sdram_test_util.SDRAMUTFramework):
     def tearDown(self):
         # Test ran to completion
         self.assertTrue(all(m.complete for m in self.tb.masters))
-        
+
 
 class SDRAMMultiMasterTests:
     def testBytes0(self):
         self._run_gen(
             [
                 [
-                    self._rw(0, 128), 
-                    self._rw(800, 10), 
-                    self._rw(900, 10), 
+                    self._rw(0, 128),
+                    self._rw(800, 10),
+                    self._rw(900, 10),
                 ],
                 [
                     self._rw(128,128),
@@ -79,7 +79,7 @@ class SDRAMMultiMasterTests:
                     self._rw(700,10),
                 ],
                 self._rw(256, 128),
-                self._rw(256+128,128),    
+                self._rw(256+128,128),
             ])
 
     def testBytesEndOfMem(self):
@@ -120,4 +120,3 @@ class SDRAMMuxTests_mt48lc16m16a2(SDRAMMultiMasterTests,
 
 if __name__ == "__main__":
     unittest.main()
-     

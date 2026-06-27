@@ -5,9 +5,9 @@ from misoc.interconnect.stream import Endpoint
 class DummySource(Module):
     def __init__(self, base, data = 300, idle = 1000):
         self.source = Endpoint([('d', 8), ('last', 1)])
-        
+
         self.submodules.dummy = FSM()
-        
+
         dummy_count = Signal(max=max(idle, data))
         dummy_count_next = Signal(max=max(idle, data))
         self.sync += dummy_count.eq(dummy_count_next)

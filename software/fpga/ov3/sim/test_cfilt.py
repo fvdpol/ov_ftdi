@@ -96,7 +96,7 @@ class TestBench(Module):
 class TestRXCmdFilter(unittest.TestCase):
     def setUp(self):
         self.tb = TestBench()
-    
+
     def test_cfilt(self):
         inp = [(1,0x40), (0,0xCA), (1,0x10), (0, 0xFE), (1, 0x41)]
         output = []

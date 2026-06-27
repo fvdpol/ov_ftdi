@@ -29,14 +29,14 @@ class RXCmdFilter(Module):
                 is_ovf.eq(self.sink.payload.rxcmd & (self.sink.payload.d == RXCMD_MAGIC_OVF)),
                 is_nop.eq(self.sink.payload.rxcmd & (self.sink.payload.d == RXCMD_MAGIC_NOP)),
 
-                is_active.eq(self.sink.payload.rxcmd & 
-                    ~self.sink.payload.d[6] & 
+                is_active.eq(self.sink.payload.rxcmd &
+                    ~self.sink.payload.d[6] &
                     (self.sink.payload.d[4:6] == 0x1)),
                 is_nactive.eq(self.sink.payload.rxcmd &
                     ~self.sink.payload.d[6] &
                     (self.sink.payload.d[4:6] == 0x0)),
-                is_error.eq(self.sink.payload.rxcmd & 
-                    ~self.sink.payload.d[6] & 
+                is_error.eq(self.sink.payload.rxcmd &
+                    ~self.sink.payload.d[6] &
                     (self.sink.payload.d[4:6] == 0x3)),
 
                 self.source.payload.d.eq(self.sink.payload.d),
@@ -71,7 +71,7 @@ class RXCmdFilter(Module):
                 ]
 
         def act(state, *args):
-            self.fsm.act(state, 
+            self.fsm.act(state,
                 If(self.sink.stb,
                     If(~self.sink.payload.rxcmd,
                         pass_(state)

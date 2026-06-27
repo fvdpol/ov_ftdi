@@ -41,7 +41,7 @@ class ULPICfg(Module, AutoCSR):
         # (e.g. reconfigure transceiver speed after reset).
         #
         # Format:
-        #   
+        #
         #    7    6    5    4    3    2    1    0
         #    ---------------------------------------
         #    0    0    0    0    0    FSTP BRST URST
@@ -54,12 +54,12 @@ class ULPICfg(Module, AutoCSR):
 
 
         # TESTING - UCFG_STAT register
-        # 
-        # CKACT: single status bit that indicates whether 
+        #
+        # CKACT: single status bit that indicates whether
         # the ULPI phy is providing a 60mhz clock signal on clk
         #
         # Format:
-        #   
+        #
         #    7    6    5    4    3    2    1    0
         #    ----------------------------------------
         #    0    0    0    0    0    0    0    CKACT
@@ -77,9 +77,9 @@ class ULPICfg(Module, AutoCSR):
         last_ulpi_clk = Signal(1)
         self.sync += [
                 last_ulpi_clk.eq(sys_ulpi_clk),
-                
+
                 # On detected transistions, reset the countdown
-                If(last_ulpi_clk != sys_ulpi_clk, 
+                If(last_ulpi_clk != sys_ulpi_clk,
                     ulpi_clk_act_cd.eq(0)
                 ).Elif(
                     ulpi_clk_act_cd < 0xFF, ulpi_clk_act_cd.eq(ulpi_clk_act_cd + 1)
@@ -90,11 +90,11 @@ class ULPICfg(Module, AutoCSR):
         # ULPI_xDATA and xCMD registers
         #
         # Used for reading/writing ULPI regs
-        # 
+        #
         # ULPI_xDATA Format: just 8 bit data reg
         #
         # ULPI_xCMD Format:
-        #   
+        #
         #    7    6    5    4    3    2    1    0
         #    ----------------------------------------
         #    GO   0    UA5  UA4  UA3  UA2  UA1  UA0
@@ -105,11 +105,11 @@ class ULPICfg(Module, AutoCSR):
         #    - clears to 0 when transaction complete
         #
         # UA5..0 - ULPI register address
-        
+
         # To do a write: write UCFG_WDATA with the value
         # and then write ULPI_WCMD with GO | addr
-        # 
-        # To read: write ULPI_RCMD with GO | addr, poll 
+        #
+        # To read: write ULPI_RCMD with GO | addr, poll
         # until GO clear, then read ULPI_RDATA
 
         self._wdata = CSRStorage(8)

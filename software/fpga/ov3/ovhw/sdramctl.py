@@ -168,10 +168,10 @@ class SDRAMCTL(Module):
 
         self.sync += [
             If(write_cycle | read_cycle, i_col_cnt.eq(i_col_cnt + 1)),
-            If(~self.hostif.d_term & last_col & write_cycle | 
+            If(~self.hostif.d_term & last_col & write_cycle |
                read_cycle & last_col & ~kill_read & ~(returning_read & self.hostif.d_term),
                cmd_needs_reissue.eq(1)).Elif(cmd_reissue | kill_read, cmd_needs_reissue.eq(0))
-               
+
         ]
 
         # Hostif streaming interface signal generation
@@ -225,7 +225,7 @@ class SDRAMCTL(Module):
                             NextState("REFRESH")
                         ).Elif(cmd_needs_reissue &~ kill_read &~ (returning_read & self.hostif.d_term),
                             cmd_reissue.eq(1),
-                            If(iwr, 
+                            If(iwr,
                                 NextState("WRITE_ACTIVE")
                             ).Else(
                                 NextState("READ_ACTIVE")
@@ -247,7 +247,7 @@ class SDRAMCTL(Module):
         fsm.act("WRITE_ACTIVE", cmd.eq(ACTIVE), ba.eq(i_bank), a.eq(i_row))
         fsm.delayed_enter("WRITE_ACTIVE", "WRITE", tRCD)
         fsm.act("WRITE", cmd.eq(WRITE), ba.eq(i_bank), a.eq(i_col),
-                write_cycle.eq(1), 
+                write_cycle.eq(1),
                 If(can_continue_write,
                    NextState("WRITING")
                 ).Else(
@@ -285,6 +285,3 @@ class SDRAMCTL(Module):
         fsm.delayed_enter("PRECHARGE_TWR", "PRECHARGE", tWR-1),
         fsm.act("PRECHARGE", cmd.eq(PRECHARGE), a[10].eq(1)),
         fsm.delayed_enter("PRECHARGE", "IDLE", tRP)
-
-
-

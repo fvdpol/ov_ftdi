@@ -10,7 +10,7 @@ _io = [
     ("clk50", 0, Pins("P94"), IOStandard("LVCMOS33")),
     ("clk12", 0, Pins("P50"), IOStandard("LVCMOS33")),
 
-    ("ulpi", 0, 
+    ("ulpi", 0,
         Subsignal("d", Pins("P120 P119 P118 P117 P116 P115 P114 P112")),
         Subsignal("rst", Pins("P127")),
         Subsignal("stp", Pins("P126")),

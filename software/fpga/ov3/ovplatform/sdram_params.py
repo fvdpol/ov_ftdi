@@ -1,17 +1,17 @@
 from collections import namedtuple
 
-SDRAMParams = namedtuple("SDRAMParams", 
+SDRAMParams = namedtuple("SDRAMParams",
     ('databits', # Width of the SDRAM bus in bits
-     'rowbits', 
-     'colbits', 
-     'bankbits', 
-     'burst', 
-     'tRESET', 
+     'rowbits',
+     'colbits',
+     'bankbits',
+     'burst',
+     'tRESET',
      'tCL',
-     'tRP', 
-     'tRFC', 
-     'tRCD', 
-     'tREFI', 
+     'tRP',
+     'tRFC',
+     'tRCD',
+     'tREFI',
      'tWR'
     ))
 
@@ -60,5 +60,3 @@ class BasicSDPUnitTests(unittest.TestCase):
     def testSDRAMArray(self):
         s = getSDRAMModelParams("mt48lc16m16a2", 2)
         self.assertEquals(s.params.databits, 32)
-
-

@@ -14,16 +14,16 @@ class CmdProc(Module):
                 bdec.sink.stb.eq(ftdi_sync.incoming_fifo.readable),
                 bdec.sink.payload.d.eq(ftdi_sync.incoming_fifo.dout),
                 ftdi_sync.incoming_fifo.re.eq(bdec.sink.ack),
-                
+
                 ]
-        
+
         # Bus master
         busmaster = CSR_Master(has_completion=True)
         self.master = busmaster.master
 
         # Encode output for response
         benc = BusEncode()
-        
+
         # Connect decoder to busmaster to encoder
         #g = DataFlowGraph()
 

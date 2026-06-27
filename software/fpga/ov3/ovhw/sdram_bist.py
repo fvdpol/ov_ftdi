@@ -27,7 +27,7 @@ class SDRAMBIST(Module):
         self.comb += self.busy.eq(~self.fsm.ongoing("IDLE"))
         pat = Signal(width)
 
-        
+
         self.lfsr = Signal(32)
 
         self.sync += [
