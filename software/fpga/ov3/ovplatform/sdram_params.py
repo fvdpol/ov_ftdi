@@ -59,4 +59,4 @@ class BasicSDPUnitTests(unittest.TestCase):
     # Ensure databit calculation is correct
     def testSDRAMArray(self):
         s = getSDRAMModelParams("mt48lc16m16a2", 2)
-        self.assertEquals(s.params.databits, 32)
+        self.assertEqual(s.params.databits, 32)
