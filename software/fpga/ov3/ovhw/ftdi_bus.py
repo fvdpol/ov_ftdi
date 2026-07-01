@@ -8,8 +8,9 @@ class FTDI_sync245(Module):
         # FTDI controller uses unidirectional logical interface that allows
         # simulation testing with Migen simulator.
 
-        # SoC should connect all outputs and inputs using combinational logic,
-        # i.e. without registering.
+        # SoC must register d_oe, d_o, rd_n, oe_n and wr_n in the FTDI clock
+        # domain. All other signals (siwua_n output and all inputs) should be
+        # connected using combinational logic, i.e. without registering.
 
         # SoC must instantiate a vendor-specific tri-state buffer for data.
         # When d_oe = 1, d_o drives FTDI data bus.
@@ -55,21 +56,31 @@ class FTDI_sync245(Module):
             txe_r.eq(self.txe_n),
         ]
 
-        # Use registers for all IOs to help timing
-        self.sync.ftdi += [
+        # Combinatorial bus controls SoC registers in FTDI clock domain.
+        # WR# and the write data come from the write datapath below.
+        self.comb += [
             self.rd_n.eq(~next_RD | rxf_r),
             self.oe_n.eq(~next_OE),
             self.d_oe.eq(next_dOE),
         ]
 
         # Delayed copies for qualifying logic
+        # SoC may register rd_n/oe_n in a way that does not allow routing back
+        # the registered outputs to fabric logic, so we keep our own registered
+        # copies in rd_n_r/oe_n_r.
         d_o_r = Signal(8)
+        wr_n_r = Signal(reset=1)
+        rd_n_r = Signal(reset=1)
         rd_n_d = Signal(reset=1)
+        oe_n_r = Signal(reset=1)
         oe_n_d = Signal(reset=1)
         self.sync.ftdi += [
             d_o_r.eq(self.d_o),
-            rd_n_d.eq(self.rd_n),
-            oe_n_d.eq(self.oe_n),
+            wr_n_r.eq(self.wr_n),
+            rd_n_r.eq(self.rd_n),
+            rd_n_d.eq(rd_n_r),
+            oe_n_r.eq(self.oe_n),
+            oe_n_d.eq(oe_n_r),
         ]
 
         # Captured data (din_r) is valid on cycle where FT245 was driving data
@@ -97,10 +108,6 @@ class FTDI_sync245(Module):
         ]
 
         # FTDI accepts data when both WR# and TXE# are low.
-        tx_accepted = Signal()
-        # Delayed copy of tx_accepted to be used in logic to decide next state.
-        # tx_accepted cannot be used directly because it would be a combnational
-        # loop.
         tx_taken = Signal()
         # When write burst starts, tx_outstanding goes high on first byte read
         # from output_fifo and remains high for one cycle after the last byte
@@ -116,13 +123,12 @@ class FTDI_sync245(Module):
         # is accepted by FTDI.
         tx_stalled = Signal()
         self.comb += [
-            tx_accepted.eq(~self.wr_n & ~self.txe_n),
+            tx_taken.eq(~wr_n_r & ~self.txe_n),
             tx_stalled.eq(tx_outstanding & ~tx_taken),
             # By default, we do not have data available for FTDI to accept
             self.wr_n.eq(1),
         ]
         self.sync.ftdi += [
-            tx_taken.eq(tx_accepted),
             If(output_fifo.re,
                 tx_outstanding.eq(1),
             ).Elif(tx_taken,
@@ -172,8 +178,9 @@ class FTDI_sync245(Module):
                 next_OE.eq(1),
                 NextState('READ'),
             ).Elif(can_write,
-                # Enable tristate output on next cycle.
+                # Enable tristate output and write data if ready.
                 next_dOE.eq(1),
+                self.wr_n.eq(~tx_ready),
                 NextState('WRITE'),
             )
         )
@@ -181,8 +188,9 @@ class FTDI_sync245(Module):
         bsf.act('IDLE_R',
             # Bus turnaround (OE# high, SoC tristate not driving). Prefer write.
             If(can_write,
-                # Enable tristate output on next cycle.
+                # Enable tristate output and write data if ready.
                 next_dOE.eq(1),
+                self.wr_n.eq(~tx_ready),
                 NextState('WRITE'),
             ).Elif(can_read,
                 next_OE.eq(1),

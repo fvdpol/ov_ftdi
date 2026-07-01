@@ -152,21 +152,47 @@ class OV3BaseSoC(Module):
         return self.ulpi_pl
 
     def _connect_ftdi(self, ftdi_pins, ftdi_bus):
+        # Combinational signals: FPGA inputs (RXF#, TXE#) + async SIWUA#
         self.comb += [
             ftdi_bus.rxf_n.eq(ftdi_pins.rxf_n),
             ftdi_bus.txe_n.eq(ftdi_pins.txe_n),
             ftdi_pins.siwua_n.eq(ftdi_bus.siwua_n),
-            ftdi_pins.rd_n.eq(ftdi_bus.rd_n),
-            ftdi_pins.oe_n.eq(ftdi_bus.oe_n),
-            ftdi_pins.wr_n.eq(ftdi_bus.wr_n),
         ]
-        ftdi_dq = TSTriple(8)
-        self.specials += ftdi_dq.get_tristate(ftdi_pins.d)
+
+        # Registered control outputs, IOB packed
+        # Generate internal single-fanout signals here that are eligible for IOB
+        # packing and for which XST correctly infers FF's INIT value.
+        ftdi_rd_n = Signal(reset=ftdi_bus.rd_n.reset)
+        ftdi_oe_n = Signal(reset=ftdi_bus.oe_n.reset)
+        ftdi_wr_n = Signal(reset=ftdi_bus.wr_n.reset)
+        self.sync.ftdi += [
+            ftdi_rd_n.eq(ftdi_bus.rd_n),
+            ftdi_oe_n.eq(ftdi_bus.oe_n),
+            ftdi_wr_n.eq(ftdi_bus.wr_n),
+        ]
         self.comb += [
-            ftdi_dq.o.eq(ftdi_bus.d_o),
-            ftdi_dq.oe.eq(ftdi_bus.d_oe),
-            ftdi_bus.d_i.eq(ftdi_dq.i),
+            ftdi_pins.rd_n.eq(ftdi_rd_n),
+            ftdi_pins.oe_n.eq(ftdi_oe_n),
+            ftdi_pins.wr_n.eq(ftdi_wr_n),
         ]
+        ftdi_pins.rd_n.attr.add(("IOB", "TRUE"))
+        ftdi_pins.oe_n.attr.add(("IOB", "TRUE"))
+        ftdi_pins.wr_n.attr.add(("IOB", "TRUE"))
+
+        # Registered data tristate enable, default to Hi-Z at reset
+        t_ff = Signal(reset=1)
+        t_ff.attr.add(("IOB", "TRUE"))
+        self.sync.ftdi += t_ff.eq(~ftdi_bus.d_oe)
+
+        # Data bus: per-bit registered output, combinational input, IOB packed
+        for i in range(8):
+            o_ff = Signal(name="ftdi_dq%d_o" % i)
+            o_ff.attr.add(("IOB", "TRUE"))
+            self.sync.ftdi += o_ff.eq(ftdi_bus.d_o[i])
+            self.specials += Instance("IOBUF",
+                i_I=o_ff, o_O=ftdi_bus.d_i[i], i_T=t_ff,
+                io_IO=ftdi_pins.d[i],
+            )
 
     def add_ftdi_bus(self, ftdi_pins):
         # FTDI clock domain (driven by FT2232H)

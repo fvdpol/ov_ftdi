@@ -29,6 +29,8 @@ class TestBench(Module):
             dut.txe_n.eq(ftdi_io.txe_n),
             dut.d_i.eq(ftdi_io.data_ftdi),
             ftdi_io.siwu_n.eq(dut.siwua_n),
+        ]
+        self.sync.ftdi += [
             ftdi_io.rd_n.eq(dut.rd_n),
             ftdi_io.oe_n.eq(dut.oe_n),
             ftdi_io.wr_n.eq(dut.wr_n),
