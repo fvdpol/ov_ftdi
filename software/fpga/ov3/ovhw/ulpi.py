@@ -299,41 +299,51 @@ class ULPI_ctrl(Module):
         fsm.act("RWD",
             If(ulpi_bus.dir,
                 NextState("RX"),
-                ulpi_data_tristate_next.eq(1)
-            ).Elif(~ulpi_bus.dir & ulpi_bus.nxt,
-                NextState("RWS"),
-                ulpi_data_next.eq(reg_write_data),
+                ulpi_data_tristate_next.eq(1),
+            ).Elif(~ulpi_bus.dir,
                 ulpi_data_tristate_next.eq(0),
-                ulpi_stp_next.eq(0)
+                ulpi_stp_next.eq(0),
+                If(ulpi_bus.nxt,
+                    # Write is finished at end of this cycle, STP happens
+                    # unconditionally at next cycle. Even if PHY asserts
+                    # dir next cycle it does not abort the write.
+                    NextState("RWS"),
+                    ulpi_data_next.eq(reg_write_data),
+                    # Update transceiver speed on function control register change
+                    If(reg_write_addr == 0x84,
+                        NextValue(xcvr_select, reg_write_data[0:2])
+                    ).Elif(reg_write_addr == 0x85,
+                        NextValue(xcvr_select, xcvr_select | reg_write_data[0:2])
+                    ).Elif(reg_write_addr == 0x86,
+                        NextValue(xcvr_select, xcvr_select & ~reg_write_data[0:2])
+                    ),
+                ).Else(
+                    # Keep holding data on the bus until nxt asserts again
+                    NextState("RWD"),
+                    ulpi_data_next.eq(reg_write_data),
+                ),
             ).Else(
                 NextState("ERROR")
             ),
         )
 
         fsm.act("RWS",
+            # STP is asserted in this cycle because register write is completed.
+            ulpi_stp_next.eq(1),
+            If(internal_reg_write,
+                NextValue(internal_reg_write, 0),
+                NextValue(ls_packet_on_fs_link, switch_to_low_speed),
+                NextValue(switch_to_low_speed, 0),
+                NextValue(switch_to_full_speed, 0),
+                NextValue(wait_for_ls_response, 0),
+            ).Else(
+                RegWriteAckSet.eq(1),
+            ),
             If(~ulpi_bus.dir,
                 NextState("IDLE"),
                 ulpi_data_next.eq(0x00), # NOOP
                 ulpi_data_tristate_next.eq(0),
-                ulpi_stp_next.eq(1),
-                # Update transceiver speed on function control register change
-                If(reg_write_addr == 0x84,
-                    NextValue(xcvr_select, reg_write_data[0:2])
-                ).Elif(reg_write_addr == 0x85,
-                    NextValue(xcvr_select, xcvr_select | reg_write_data[0:2])
-                ).Elif(reg_write_addr == 0x86,
-                    NextValue(xcvr_select, xcvr_select & ~reg_write_data[0:2])
-                ),
-                If(internal_reg_write,
-                    NextValue(internal_reg_write, 0),
-                    NextValue(ls_packet_on_fs_link, switch_to_low_speed),
-                    NextValue(switch_to_low_speed, 0),
-                    NextValue(switch_to_full_speed, 0),
-                    NextValue(wait_for_ls_response, 0),
-                ).Else(
-                    RegWriteAckSet.eq(1),
-                )
-            ).Elif(ulpi_bus.dir,
+            ).Else(
                 NextState("RX"),
                 ulpi_data_tristate_next.eq(1),
             ),
@@ -343,7 +353,6 @@ class ULPI_ctrl(Module):
             If(ulpi_bus.dir,
                 ulpi_data_tristate_next.eq(1), # TA
                 NextState("RX"),
-                RegWriteAckSet.eq(1)
             ).Elif(~ulpi_bus.dir,
                 ulpi_data_next.eq(0xC0 | ulpi_reg.raddr),
                 If(ulpi_bus.nxt,
@@ -364,7 +373,6 @@ class ULPI_ctrl(Module):
                 NextState("RRD")
             ).Elif(ulpi_bus.dir, # PHY indicates RX
                 NextState("RX"),
-                RegWriteAckSet.eq(1)
             ).Else(
                 NextState("ERROR")
             ),
@@ -377,7 +385,6 @@ class ULPI_ctrl(Module):
                 ulpi_state_rrd.eq(1),
             ).Elif(ulpi_bus.dir & ulpi_bus.nxt,
                 NextState("RX"),
-                RegWriteAckSet.eq(1)
             ).Else(
                 NextState("ERROR")
             ),
