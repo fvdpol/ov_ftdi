@@ -34,7 +34,7 @@ _io = [
         Subsignal("wr_n", Pins("P40")),
         Subsignal("siwua_n", Pins("P66")),
         Subsignal("oe_n", Pins("P38")),
-        IOStandard("LVCMOS33"), Misc("SLEW=FAST")
+        IOStandard("LVCMOS33"), Drive(4), Misc("SLEW=FAST")
     ),
 
     ("spare", 0, Pins("P102"), IOStandard("LVCMOS33")),

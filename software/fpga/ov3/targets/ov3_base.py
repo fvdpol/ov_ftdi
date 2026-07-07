@@ -192,6 +192,7 @@ class OV3BaseSoC(Module):
             self.specials += Instance("IOBUF",
                 i_I=o_ff, o_O=ftdi_bus.d_i[i], i_T=t_ff,
                 io_IO=ftdi_pins.d[i],
+                p_DRIVE=4, p_SLEW="FAST",
             )
 
     def add_ftdi_bus(self, ftdi_pins):
