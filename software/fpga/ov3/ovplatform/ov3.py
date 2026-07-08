@@ -16,7 +16,7 @@ _io = [
         Subsignal("dir", Pins("P124")),
         Subsignal("clk", Pins("P123"), Misc("PULLDOWN")),
         Subsignal("nxt", Pins("P121")),
-        IOStandard("LVCMOS33"), Misc("SLEW=FAST")
+        IOStandard("LVCMOS33"), Drive(2), Misc("SLEW=QUIETIO")
     ),
 
     ("target", 0,

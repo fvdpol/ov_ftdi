@@ -138,6 +138,7 @@ class OV3BaseSoC(Module):
             self.specials += Instance("IOBUF",
                 i_I=o_ff, o_O=ulpi_pl.d_i[i], i_T=t_ff,
                 io_IO=ulpi_pins.d[i],
+                p_DRIVE=2, p_SLEW="QUIETIO",
             )
 
     def add_ulpi_pl(self, ulpi_pins, ulpi_cd_rst, ulpi_stp_ovr):
