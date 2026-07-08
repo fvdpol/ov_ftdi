@@ -340,33 +340,25 @@ class ULPI_ctrl(Module):
         )
 
         fsm.act("RR0",
-            If(~ulpi_bus.dir,
-                ulpi_data_next.eq(0xC0 | ulpi_reg.raddr), # REGR
-                NextState("RR1")
-            ).Elif(ulpi_bus.dir,
+            If(ulpi_bus.dir,
+                ulpi_data_tristate_next.eq(1), # TA
                 NextState("RX"),
                 RegWriteAckSet.eq(1)
+            ).Elif(~ulpi_bus.dir,
+                ulpi_data_next.eq(0xC0 | ulpi_reg.raddr),
+                If(ulpi_bus.nxt,
+                    # PHY accepts RegRead command
+                    NextState("RR1")
+                ).Else(
+                    # Keep holding RegRead command
+                    NextState("RR0")
+                ),
             ).Else(
                 NextState("ERROR")
             ),
         )
 
         fsm.act("RR1",
-            If(~ulpi_bus.dir & ulpi_bus.nxt, # PHY accepts REGR
-                ulpi_data_tristate_next.eq(1), # TA
-                NextState("RR2")
-            ).Elif(~ulpi_bus.dir & ~ulpi_bus.nxt, # PHY delays REGR
-                ulpi_data_next.eq(0xC0 | ulpi_reg.raddr), # REGR
-                NextState("RR1")
-            ).Elif(ulpi_bus.dir,
-                NextState("RX"),
-                RegWriteAckSet.eq(1)
-            ).Else(
-                NextState("ERROR")
-            ),
-        )
-
-        fsm.act("RR2",
             ulpi_data_tristate_next.eq(1),
             If(~ulpi_bus.nxt, # REGR continue
                 NextState("RRD")
@@ -380,7 +372,7 @@ class ULPI_ctrl(Module):
 
         fsm.act("RRD",
             If(ulpi_bus.dir & ~ulpi_bus.nxt,
-                NextState("IDLE"),
+                NextState("RX"),
                 RegReadAckSet.eq(1),
                 ulpi_state_rrd.eq(1),
             ).Elif(ulpi_bus.dir & ulpi_bus.nxt,
