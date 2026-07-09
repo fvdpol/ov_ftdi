@@ -13,6 +13,9 @@ TARGETS := $(MAIN_TARGET) $(FPGA_TEST_TARGETS)
 # Arbitrarily chosen minimum slack required to account for PCB traces
 MIN_SLACK := 0.3
 
+# Minimum PlanAhead SSN remaining margin required, in percent
+MIN_SSN_MARGIN := 25.0
+
 .DELETE_ON_ERROR:
 .PHONY: main all clean test testall testfpga run
 
@@ -27,7 +30,7 @@ define TARGET_RULES
 
 $(call bitfile,$1): $(PY_FILES)
 	$$(PYTHON) build.py --target $1 -d $(call build_dir,$1) -n $1 \
-	--min-slack $$(MIN_SLACK)
+	--min-slack $$(MIN_SLACK) --min-margin $$(MIN_SSN_MARGIN)
 
 $(call fwpkgfile,$1): $(call bitfile,$1)
 	$(PYTHON) -m zipfile -c $$@ $$< $(call build_dir,$1)/map.txt

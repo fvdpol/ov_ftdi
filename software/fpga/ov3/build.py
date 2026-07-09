@@ -2,6 +2,7 @@ from ovplatform.ov3 import Platform
 from targets.ov3_main import OV3
 from targets.ov3_ftdi_tests import FTDILoopback, FTDITXRamp
 import check_timing
+import check_ssn
 
 import sys
 import argparse
@@ -11,6 +12,7 @@ import platform
 import zipfile
 import shutil
 import subprocess
+import tempfile
 
 
 # Buildable tops (FPGA bitstreams)
@@ -30,6 +32,7 @@ def parse_args():
     p.add_argument('-p', '--generate-fwpkg', action='store_true', default=False, help='Generate firmware package after build finishes.')
     p.add_argument('-m', '--mibuild-params', default='{}', type=json.loads, help='Extra mibuild parameters (in JSON).')
     p.add_argument('--min-slack', type=float, default=0.3, help='Minimum required timing slack in ns for the post-build trce check.')
+    p.add_argument('--min-margin', type=float, default=25.0, help='Minimum required SSN remaining margin in percent for the post-build report_ssn check.')
     return p.parse_args()
 
 
@@ -102,6 +105,42 @@ def run_timing_check(build_dir, build_name, min_slack):
     return check_timing.check_report(os.path.join(build_dir, twr), min_slack)
 
 
+def run_ssn_check(build_dir, build_name, device, min_margin):
+    """Generate Simultaneously Switching Noise Report and verify remaining margin.
+
+    Generate build_name_ssn.csv in build_dir and check it via check_ssn.
+    Return check's exit code (non-zero on failure).
+    """
+    build_dir = os.path.abspath(build_dir)
+    ngc = os.path.join(build_dir, build_name + ".ngc")
+    ucf = os.path.join(build_dir, build_name + ".ucf")
+    ncd = os.path.join(build_dir, build_name + ".ncd")
+    pcf = os.path.join(build_dir, build_name + ".pcf")
+    csv_path = os.path.join(build_dir, build_name + "_ssn.csv")
+
+    with tempfile.TemporaryDirectory(prefix="planahead_ssn_") as tmp:
+        proj_dir = os.path.join(tmp, "ssn_proj")
+        tcl_path = os.path.join(tmp, "report_ssn.tcl")
+        with open(tcl_path, "w") as f:
+            f.write("""
+create_project -force ssn_proj {{{proj_dir}}} -part {{{device}}}
+add_files {{{ngc}}}
+add_files -fileset constrs_1 {{{ucf}}}
+set_property design_mode GateLvl [current_fileset]
+set_property top {{{top}}} [current_fileset]
+reset_run impl_1
+import_as_run -run impl_1 -pcf {{{pcf}}} {{{ncd}}}
+open_run impl_1
+set fp [open {{{csv_path}}} w]
+puts $fp [report_ssn -format CSV -return_string]
+close $fp
+""".format(proj_dir=proj_dir, device=device, ngc=ngc, ucf=ucf,
+           top=build_name, pcf=pcf, ncd=ncd, csv_path=csv_path))
+        subprocess.check_call(["planAhead", "-mode", "batch", "-source", tcl_path], cwd=tmp)
+
+    return check_ssn.check_report(csv_path, min_margin)
+
+
 def gen_mapfile(ov3_mod):
     # Generate mapfile for tool / sw usage
     r = ""
@@ -160,6 +199,10 @@ if __name__ == "__main__":
     plat.build(top, **mibuild_params)
 
     # Run post implementation checks
+    if run_ssn_check(args.build_dir, args.build_name, plat.device, args.min_margin):
+        # Fail build that does not have enough SSN margin
+        sys.exit(1)
+
     if run_timing_check(args.build_dir, args.build_name, args.min_slack):
         # Fail build that does not achieve timing closure
         sys.exit(1)
