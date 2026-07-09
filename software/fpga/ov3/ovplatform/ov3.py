@@ -2,7 +2,7 @@ from migen.build.generic_platform import *
 from migen.build.xilinx import XilinxPlatform
 
 _io = [
-    ("leds", 0, Pins("P57 P58 P59"), IOStandard("LVCMOS33"), Drive(24), Misc("SLEW=QUIETIO")),
+    ("leds", 0, Pins("P57 P58 P59"), IOStandard("LVCMOS33"), Drive(2), Misc("SLEW=QUIETIO")),
 
     ("btn", 0, Pins("P67"), IOStandard("LVCMOS33")),
 
