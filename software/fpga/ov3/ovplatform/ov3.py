@@ -1,6 +1,5 @@
 from migen.build.generic_platform import *
 from migen.build.xilinx import XilinxPlatform
-from migen.genlib.io import CRG
 
 _io = [
     ("leds", 0, Pins("P57 P58 P59"), IOStandard("LVCMOS33"), Drive(24), Misc("SLEW=QUIETIO")),
@@ -90,19 +89,13 @@ class Platform(XilinxPlatform):
 
 
     def do_finalize(self, fragment):
-        # Add the CRG
-        crg = CRG(self.request("clk50"))
-        fragment += crg.get_fragment()
+        self.add_platform_command("""CONFIG VCCAUX = "3.3";""")
 
         clocks = {
-            "clk50": 50.0,
             "clk12": 12.0,
             ("ulpi", "clk"): 60.0,
             ("ftdi", "clk"): 60.0
         }
-
-        # Make sure init_b is used / added to the UCF
-        self.request("init_b")
 
         for name, mhz in clocks.items():
             period = 1000.0 / mhz
