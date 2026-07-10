@@ -109,19 +109,36 @@ class OV3BaseSoC(Module):
         self.clock_domains.cd_sys = self.crg.cd_sys
 
     def _connect_ulpi(self, ulpi_pins, ulpi_pl):
+        # Combinational signals: rst, nxt, dir
         self.comb += [
             ulpi_pins.rst.eq(ulpi_pl.rst),
-            ulpi_pins.stp.eq(ulpi_pl.stp),
             ulpi_pl.nxt.eq(ulpi_pins.nxt),
             ulpi_pl.dir.eq(ulpi_pins.dir),
         ]
-        ulpi_dq = TSTriple(8)
-        self.specials += ulpi_dq.get_tristate(ulpi_pins.d)
-        self.comb += [
-            ulpi_dq.o.eq(ulpi_pl.d_o),
-            ulpi_dq.oe.eq(ulpi_pl.d_oe),
-            ulpi_pl.d_i.eq(ulpi_dq.i),
-        ]
+
+        # STP: registered output, IOB packed
+        ulpi_pins.stp.attr.add(("IOB", "TRUE"))
+        self.sync.ulpi += ulpi_pins.stp.eq(ulpi_pl.stp)
+
+        # Registered data tristate enable, default to Hi-Z at reset.
+        # Disable tristate (drive data bus) according to d_oe signal.
+        # Enable tristate during turnaround cycle (when dir goes high), so we
+        # are already Hi-Z once turnaround cycle ends.
+        t_ff = Signal(reset=1)
+        self.specials += Instance("FDPE",
+            p_INIT=1, i_D=~ulpi_pl.d_oe, i_PRE=ulpi_pins.dir,
+            i_CE=1, i_C=ClockSignal("ulpi"), o_Q=t_ff,
+            attr={("IOB", "TRUE")})
+
+        # Data bus: per-bit registered output, combinational input, IOB packed
+        for i in range(8):
+            o_ff = Signal(name="ulpi_dq%d_o" % i, reset_less=True)
+            o_ff.attr.add(("IOB", "TRUE"))
+            self.sync.ulpi += o_ff.eq(ulpi_pl.d_o[i])
+            self.specials += Instance("IOBUF",
+                i_I=o_ff, o_O=ulpi_pl.d_i[i], i_T=t_ff,
+                io_IO=ulpi_pins.d[i],
+            )
 
     def add_ulpi_pl(self, ulpi_pins, ulpi_cd_rst, ulpi_stp_ovr):
         # ULPI clock domain (driven by USB3343 PHY).

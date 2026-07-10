@@ -45,10 +45,24 @@ class ULPITB(Module):
         self.submodules.pl = pl = ULPI_pl()
 
         # Connect ULPI_pl to PHY model interface
+        # First capture actual ULPI outputs temporary flip-flops
+        d_o = Signal(8)
+        d_oe = Signal()
+        stp = Signal()
+        self.sync.ulpi += [
+            d_o.eq(pl.d_o),
+            d_oe.eq(pl.d_oe),
+            stp.eq(pl.stp)
+        ]
+        # Then mimic the propagation delay
+        link_doe = Signal()
+        self.sync.ulpi_link_output += [
+            phy_io.data_link.eq(d_o),
+            link_doe.eq(d_oe),
+            phy_io.stp.eq(stp),
+        ]
         self.comb += [
-            phy_io.data_link.eq(pl.d_o),
-            phy_io.link_drives_data.eq(pl.d_oe),
-            phy_io.stp.eq(pl.stp),
+            phy_io.link_drives_data.eq(link_doe & ~phy_io.dir),
             pl.d_i.eq(phy_io.data_phy),
             pl.dir.eq(phy_io.dir),
             pl.nxt.eq(phy_io.nxt),
@@ -144,9 +158,21 @@ class TestULPI(unittest.TestCase):
                        clocks={
                            "ulpi": 16,
                            "ulpi_phy_output": (16, 10),
+                           "ulpi_link_output": (16, 6),
                        },
                        vcd_name=vcd_name)
         return tb
+
+    def _extra_noop_cycle(self, tb):
+        # NOOP cycle introduced when registering ULPI outputs. ULPI controller
+        # refactor should make it possible to eliminate this additional NOOP
+        # cycle, but it is not considered important. This function is intended
+        # to clearly mark the places in test sequences where the functionality
+        # differs post registration. Do not use for other purposes.
+        self.assertEqual(0, (yield tb.phy.io.data_link))
+        self.assertEqual(0, (yield tb.phy.io.dir))
+        self.assertEqual(0, (yield tb.phy.io.nxt))
+        yield
 
     def _start_regread(self, tb, addr):
         yield tb.ulpi_reg.raddr.eq(addr)
@@ -155,6 +181,7 @@ class TestULPI(unittest.TestCase):
         yield
         # Controller picks up request
         yield
+        yield from self._extra_noop_cycle(tb)
 
     def _perform_regread(self, tb, addr, cmd_event=None, turnaround_event=None):
         # Test only supports immediate 6-bit addresses
@@ -225,6 +252,7 @@ class TestULPI(unittest.TestCase):
         yield
         # Controller picks up request
         yield
+        yield from self._extra_noop_cycle(tb)
 
     def _perform_regwrite(self, tb, addr, val, cmd_event=None, data_event=None):
         # Test only supports immediate 6-bit addresses
@@ -458,6 +486,8 @@ class TestULPI(unittest.TestCase):
             yield from self._regread(tb, addr, cmd_event=EV_RX_DATA)
             yield from self._event_sequence(tb, EV_RX_DATA)
 
+            yield from self._extra_noop_cycle(tb)
+
             # Link must retry RegRead
             yield from self._complete_regread(tb, addr)
             self.assertEqual(0x24, (yield tb.ulpi_reg.rdata))
@@ -488,6 +518,8 @@ class TestULPI(unittest.TestCase):
         def sequence(tb):
             yield from self._regread(tb, addr, turnaround_event=EV_RX_DATA)
             yield from self._event_sequence(tb, EV_RX_DATA)
+
+            yield from self._extra_noop_cycle(tb)
 
             # Link must retry RegWrite
             yield from self._complete_regread(tb, addr)
@@ -656,10 +688,14 @@ class TestULPI(unittest.TestCase):
                 self.assertEqual(0, (yield tb.phy.io.nxt))
                 yield
 
-            # DUT should abort receive immediately after receiving PRE token
+            # Expect PRE token to be delivered on this cycle
             self.assertEqual(1, (yield tb.phy.io.dir))
             self.assertEqual(1, (yield tb.phy.io.nxt))
             self.assertEqual(FS_PRE.payload[0], (yield tb.phy.io.data_phy))
+            yield
+
+            # DUT should abort receive immediately after receiving PRE token
+            self.assertEqual(1, (yield tb.phy.io.dir))
             self.assertEqual(1, (yield tb.phy.io.stp))
             yield
 
@@ -688,6 +724,8 @@ class TestULPI(unittest.TestCase):
                 yield
 
         def sequence_suffix(tb):
+            yield from self._extra_noop_cycle(tb)
+
             yield from self._perform_regwrite(tb, 0x04, 0x69)
             yield # STP
 

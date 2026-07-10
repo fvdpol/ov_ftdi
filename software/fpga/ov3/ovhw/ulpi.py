@@ -50,12 +50,16 @@ class ULPI_pl(Module):
     def __init__(self, stp_ovr=0):
         self.ulpi_bus = ulpi_bus = Record(ULPI_BUS)
 
-        # SoC should connect all outputs and inputs using combinational logic,
-        # i.e. without registering.
+        # SoC must register d_oe, d_o and stp in the ULPI clock domain.
+        # All other signals (rst output and all inputs) should be connected
+        # using combinational logic, i.e. without registering.
 
         # SoC must instantiate a vendor-specific tri-state buffer for data.
         # When d_oe = 1, d_o drives ULPI data bus.
         # When d_oe = 0, d_i samples ULPI data bus.
+        # Vendor specific tri-state must force tri-state buffer to Hi-Z during
+        # the cycle on which dir changes from low to high. Note that registered
+        # d_oe will become 0 only when the turnaround cycle ends.
         self.d_oe = Signal()
 
         # Controller outputs (controller -> SoC -> ULPI PHY)
@@ -301,7 +305,15 @@ class ULPI_ctrl(Module):
                         NextValue(switch_to_full_speed, 1),
                     )
                 ),
-                NextState("IDLE")
+                If(regwrite_request,
+                    # RX->RW0 shortcut is necessary for PRE STP assertion,
+                    # because PHY guarantees register write only on next cycle.
+                    NextState("RW0"),
+                    NextValue(regwrite_pending, 1),
+                    ulpi_data_next.eq(reg_write_addr_next),
+                ).Else(
+                    NextState("IDLE")
+                )
             ),
         )
 
@@ -310,10 +322,17 @@ class ULPI_ctrl(Module):
                 NextState("RX"),
                 ulpi_data_tristate_next.eq(1),
             ).Elif(~ulpi_bus.dir,
-                ulpi_data_next.eq(reg_write_addr), # REGW
                 ulpi_data_tristate_next.eq(0),
                 ulpi_stp_next.eq(0),
-                If(ulpi_bus.nxt, NextState("RWD")).Else(NextState("RW0")),
+                If(ulpi_bus.nxt,
+                    # Register write command accepted, write data
+                    ulpi_data_next.eq(reg_write_data),
+                    NextState("RWD"),
+                ).Else(
+                    # Keep holding register write command until nxt
+                    ulpi_data_next.eq(reg_write_addr),
+                    NextState("RW0"),
+                ),
             ).Else(
                 NextState("ERROR")
             ),
@@ -325,13 +344,13 @@ class ULPI_ctrl(Module):
                 ulpi_data_tristate_next.eq(1),
             ).Elif(~ulpi_bus.dir,
                 ulpi_data_tristate_next.eq(0),
-                ulpi_stp_next.eq(0),
                 If(ulpi_bus.nxt,
                     # Write is finished at end of this cycle, STP happens
                     # unconditionally at next cycle. Even if PHY asserts
                     # dir next cycle it does not abort the write.
                     NextState("RWS"),
-                    ulpi_data_next.eq(reg_write_data),
+                    ulpi_data_next.eq(0x00), # NOOP
+                    ulpi_stp_next.eq(1),
                     # Update transceiver speed on function control register change
                     If(reg_write_addr == 0x84,
                         NextValue(xcvr_select, reg_write_data[0:2])
@@ -344,6 +363,7 @@ class ULPI_ctrl(Module):
                     # Keep holding data on the bus until nxt asserts again
                     NextState("RWD"),
                     ulpi_data_next.eq(reg_write_data),
+                    ulpi_stp_next.eq(0),
                 ),
             ).Else(
                 NextState("ERROR")
@@ -352,7 +372,6 @@ class ULPI_ctrl(Module):
 
         fsm.act("RWS",
             # STP is asserted in this cycle because register write is completed.
-            ulpi_stp_next.eq(1),
             NextValue(regwrite_pending, 0),
             If(internal_reg_write,
                 NextValue(internal_reg_write, 0),
@@ -378,12 +397,14 @@ class ULPI_ctrl(Module):
                 ulpi_data_tristate_next.eq(1), # TA
                 NextState("RX"),
             ).Elif(~ulpi_bus.dir,
-                ulpi_data_next.eq(0xC0 | ulpi_reg.raddr),
                 If(ulpi_bus.nxt,
                     # PHY accepts RegRead command
+                    ulpi_data_next.eq(0x00),
+                    ulpi_data_tristate_next.eq(1), # TA
                     NextState("RR1")
                 ).Else(
                     # Keep holding RegRead command
+                    ulpi_data_next.eq(0xC0 | ulpi_reg.raddr),
                     NextState("RR0")
                 ),
             ).Else(
