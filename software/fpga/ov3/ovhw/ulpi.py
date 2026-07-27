@@ -173,6 +173,54 @@ class ULPI_ctrl(Module):
             )
         ]
 
+        self.sync.ulpi += If (~fs_pre_en,
+            # User disabled automatic FS PRE handling. Do not switch to FS
+            # even if we are currently automatically switched to LS to avoid
+            # potential conflicts over configured speed.
+            switch_to_low_speed.eq(0),
+            switch_to_full_speed.eq(0),
+            ls_packet_on_fs_link.eq(0),
+        )
+
+        regwrite_pending = Signal()
+        regwrite_request = Signal()
+        reg_write_addr_next = Signal(8)
+        reg_write_data_next = Signal(8)
+        internal_reg_write_next = Signal()
+        self.comb += [
+            If(regwrite_pending,
+                # Keep holding the request accepted by FSM
+                reg_write_addr_next.eq(reg_write_addr),
+                reg_write_data_next.eq(reg_write_data),
+                regwrite_request.eq(1),
+                internal_reg_write_next.eq(internal_reg_write),
+            ).Elif(fs_pre_en & switch_to_low_speed,
+                reg_write_addr_next.eq(0x84), # REGW FUNC_CTL
+                reg_write_data_next.eq(0x6b), # FS-for-LS, reset transceiver
+                regwrite_request.eq(1),
+                internal_reg_write_next.eq(1),
+            ).Elif(fs_pre_en & (switch_to_full_speed | ls_response_timeout.done),
+                reg_write_addr_next.eq(0x84), # REGW FUNC_CTL
+                reg_write_data_next.eq(0x69), # FS, reset transceiver
+                regwrite_request.eq(1),
+                internal_reg_write_next.eq(1),
+            ).Elif(RegWriteReq,
+                reg_write_addr_next.eq(0x80 | ulpi_reg.waddr), # REGW
+                reg_write_data_next.eq(ulpi_reg.wdata),
+                regwrite_request.eq(1),
+                internal_reg_write_next.eq(0),
+            ).Else(
+                regwrite_request.eq(0),
+            )
+        ]
+
+        # Keep updating requested write until FSM locks in the request
+        self.sync.ulpi += If (~regwrite_pending,
+            reg_write_addr.eq(reg_write_addr_next),
+            reg_write_data.eq(reg_write_data_next),
+            internal_reg_write.eq(internal_reg_write_next),
+        )
+
         # capture register reads at the end of RRD
         self.sync.ulpi += If(ulpi_state_rrd,ulpi_reg.rdata.eq(ulpi_bus.di))
 
@@ -194,35 +242,10 @@ class ULPI_ctrl(Module):
                     ulpi_rx_stuff.eq(1),
                     ulpi_rx_stuff_d.eq(RXCMD_MAGIC_SOP)
                 )
-            ).Elif(~fs_pre_en & (switch_to_low_speed | switch_to_full_speed | ls_packet_on_fs_link),
-                # User disabled automatic FS PRE handling. Do not switch to FS
-                # even if we are currently automatically switched to LS to avoid
-                # potential conflicts over configured speed.
-                NextValue(switch_to_low_speed, 0),
-                NextValue(switch_to_full_speed, 0),
-                NextValue(ls_packet_on_fs_link, 0),
-            ).Elif(fs_pre_en & switch_to_low_speed,
+            ).Elif(regwrite_request,
                 NextState("RW0"),
-                ulpi_data_next.eq(0x84), # REGW FUNC_CTL
-                NextValue(reg_write_addr, 0x84),
-                NextValue(reg_write_data, 0x6b), # FS-for-LS, reset transceiver
-                NextValue(internal_reg_write, 1),
-                ulpi_data_tristate_next.eq(0),
-            ).Elif(fs_pre_en & (switch_to_full_speed | ls_response_timeout.done),
-                NextState("RW0"),
-                ulpi_data_next.eq(0x84), # REGW FUNC_CTL
-                NextValue(reg_write_addr, 0x84),
-                NextValue(reg_write_data, 0x69), # FS, reset transceiver
-                NextValue(internal_reg_write, 1),
-                ulpi_data_tristate_next.eq(0),
-            ).Elif(RegWriteReq,
-                NextState("RW0"),
-                ulpi_data_next.eq(0x80 | ulpi_reg.waddr), # REGW
-                NextValue(reg_write_addr, 0x80 | ulpi_reg.waddr),
-                NextValue(reg_write_data, ulpi_reg.wdata),
-                NextValue(internal_reg_write, 0),
-                ulpi_data_tristate_next.eq(0),
-                ulpi_stp_next.eq(0)
+                NextValue(regwrite_pending, 1),
+                ulpi_data_next.eq(reg_write_addr_next),
             ).Elif(RegReadReq,
                 NextState("RR0"),
                 ulpi_data_next.eq(0xC0 | ulpi_reg.raddr), # REGR
@@ -330,6 +353,7 @@ class ULPI_ctrl(Module):
         fsm.act("RWS",
             # STP is asserted in this cycle because register write is completed.
             ulpi_stp_next.eq(1),
+            NextValue(regwrite_pending, 0),
             If(internal_reg_write,
                 NextValue(internal_reg_write, 0),
                 NextValue(ls_packet_on_fs_link, switch_to_low_speed),
