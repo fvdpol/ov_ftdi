@@ -476,6 +476,11 @@ class RXCSniff:
 
             self.cumulative_ts = 0
 
+            # B2: PERR (overflow/error-flagged packets) throttle. Once the host
+            # falls behind, every packet is flagged and an unconditional
+            # print() per packet was itself ~a third of this thread's CPU.
+            self.perr_total = 0
+
 
         def matchMagic(self, byt):
             return byt in (0xAC, 0xAD, 0xA1, 0xA0, 0xA2)
@@ -508,7 +513,10 @@ class RXCSniff:
                 self.cumulative_ts += ts
 
                 if flags & ~(HF0_FIRST | HF0_LAST | HF0_SPEED_MASK):
-                    print("PERR: %04X (%s)" % (flags, decode_flags(flags)))
+                    self.perr_total += 1
+                    if self.perr_total == 1 or (self.perr_total & 0xFFFF) == 0:
+                        print("PERR: %04X (%s) x%d" %
+                              (flags, decode_flags(flags), self.perr_total))
 
                 if flags & HF0_FIRST:
                     self.got_start = True
