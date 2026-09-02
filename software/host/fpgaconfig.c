@@ -269,20 +269,21 @@ ConfigEnd(FTDIDevice *dev)
   if (err)
     return err;
 
-  if (byte & PORTB_INIT_BIT) {
-    fprintf(stderr, "FPGA: CRC OK\n");
-  } else {
-    fprintf(stderr, "FPGA: CRC failed\n");
-    // return -1     (not sure if this will work without a pull-up resistor)
-  }
-
+  /*
+   * DONE is high on success.  Check DONE first because INIT becomes
+   * User I/O and no longer reflects CRC status once DONE goes high.
+   */
   if (byte & PORTB_DONE_BIT) {
     fprintf(stderr, "FPGA: configured\n");
     return 0;
-  } else {
-    fprintf(stderr, "FPGA: Configuration error!\n");
-    return -1;
   }
+
+  if (byte & PORTB_INIT_BIT)
+    fprintf(stderr, "FPGA: configuration failed (DONE not asserted)\n");
+  else
+    fprintf(stderr, "FPGA: configuration failed (CRC error)\n");
+
+  return -1;
 }
 
 int FPGA_GetConfigStatus(FTDIDevice * dev)
@@ -328,10 +329,6 @@ int FPGA_GetConfigStatus(FTDIDevice * dev)
       return err;
     }
   } while (err == LIBUSB_ERROR_IO);
-
-  if (!(byte & PORTB_INIT_BIT)) {
-    return -1;
-  }
 
   if (byte & PORTB_DONE_BIT) {
     return 0;
