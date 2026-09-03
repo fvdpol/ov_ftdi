@@ -74,12 +74,14 @@ fi
 # log stays small even when --format verbose dumps hundreds of MB of decode.
 KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR'
 OVCTL_FORMAT="${OVCTL_FORMAT:-custom}"    # custom = quiet; verbose = the original #25 repro
-echo "client: $MODE  (${SECS}s, --filter-nak${MODE:+, format=$OVCTL_FORMAT})"
+FILTER_NAK="${FILTER_NAK:-1}"            # 1 = --filter-nak (default); 0 = unfiltered
+nak_args=(); [ "$FILTER_NAK" = 1 ] && nak_args=(--filter-nak)
+echo "client: $MODE  (${SECS}s, filter_nak=$FILTER_NAK, format=$OVCTL_FORMAT, no_load=${NO_LOAD:-0})"
 set +e
 case "$MODE" in
   mincapture)
     # quiet consumer, no register I/O in the window
-    python3 "$HERE/mincapture.py" "$SECS" 2>&1 \
+    FILTER_NAK="$FILTER_NAK" python3 "$HERE/mincapture.py" "$SECS" 2>&1 \
         | grep -aE "$KEEP" > "${TAG}.client.log"
     CLIENT_RC=${PIPESTATUS[0]}
     ;;
@@ -89,7 +91,7 @@ case "$MODE" in
     # verbose reproduces the exact condition #25 was reported under.
     fmt_args=(--format "$OVCTL_FORMAT")
     [ "$OVCTL_FORMAT" != verbose ] && fmt_args+=(--out "${TAG}.ovctl.bin")
-    timeout "$((SECS + 8))" python3 "$HOST/ovctl.py" sniff hs --filter-nak \
+    timeout "$((SECS + 8))" python3 "$HOST/ovctl.py" sniff hs "${nak_args[@]}" \
         "${fmt_args[@]}" --timeout "$SECS" 2>&1 \
         | grep -aE "$KEEP" > "${TAG}.client.log"
     CLIENT_RC=${PIPESTATUS[0]}

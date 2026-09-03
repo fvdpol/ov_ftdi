@@ -79,7 +79,10 @@ def setup(dev):
     dev.ulpiregs.func_ctl.wr(0x48)
 
     # CSTREAM_CFG bit 0 = stream enable, bit 2 = gateware NAK filter.
-    dev.regs.CSTREAM_CFG.wr(1 | (1 << 2))
+    cfg = 1
+    if os.getenv("FILTER_NAK", "1") == "1":
+        cfg |= (1 << 2)
+    dev.regs.CSTREAM_CFG.wr(cfg)
 
 
 def teardown(dev):
