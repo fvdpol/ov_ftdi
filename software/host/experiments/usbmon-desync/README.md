@@ -50,7 +50,9 @@ is enough to detect a desync.
   timestamp printed at load in the results.
 - Root (usbmon), `tcpdump`.
 - A configured OpenVizsla with a NAK-heavy High-Speed DUT (makes the effect
-  obvious within seconds for the `ovctl` case).
+  obvious within seconds for the `ovctl` case). The V3 enumerates as
+  `1d50:607c` once its EEPROM is programmed; `run_bisect.sh` defaults to that,
+  override with `OV_VIDPID=vvvv:pppp`.
 
 ## Run
 

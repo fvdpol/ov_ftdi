@@ -21,12 +21,20 @@ SECS="${2:-20}"
 TS="$(date +%Y%m%dT%H%M%SZ)"
 TAG="$OUT/${MODE}-${TS}"
 
-VIDPID="${OV_VIDPID:-0403:6010}"          # FT2232H; override if your board differs
+# OpenVizsla V3 enumerates with its programmed EEPROM id, not the bare FT2232H
+# 0403:6010. Override with OV_VIDPID if your board differs.
+VIDPID="${OV_VIDPID:-1d50:607c}"
 
 # --- locate the device and its usbmon bus ---------------------------------
 modprobe usbmon 2>/dev/null || true
 line="$(lsusb -d "$VIDPID" | head -n1 || true)"
-[ -n "$line" ] || { echo "no USB device $VIDPID found (lsusb -d $VIDPID)"; exit 1; }
+if [ -z "$line" ]; then
+  echo "no USB device $VIDPID found (lsusb -d $VIDPID)"
+  echo "OpenVizsla V3 is 1d50:607c once its EEPROM is programmed; a bare"
+  echo "FT2232H is 0403:6010. Set OV_VIDPID=vvvv:pppp to override. Seen now:"
+  lsusb | sed 's/^/  /'
+  exit 1
+fi
 BUS=$(echo "$line" | sed -E 's/Bus 0*([0-9]+) Device .*/\1/')
 DEV=$(echo "$line" | sed -E 's/.*Device 0*([0-9]+):.*/\1/')
 echo "device $VIDPID on bus $BUS device $DEV -> usbmon${BUS}"
