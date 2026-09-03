@@ -39,6 +39,16 @@ BUS=$(echo "$line" | sed -E 's/Bus 0*([0-9]+) Device .*/\1/')
 DEV=$(echo "$line" | sed -E 's/.*Device 0*([0-9]+):.*/\1/')
 echo "device $VIDPID on bus $BUS device $DEV -> usbmon${BUS}"
 
+# --- (re)configure the FPGA so every run is self-contained --------------
+# Reloading also wipes the SDRAM ring, so a run never starts against a dirty
+# buffer left by a killed predecessor. Skip with NO_LOAD=1 to test whatever
+# bitstream is already on the board.
+if [ "${NO_LOAD:-0}" != 1 ]; then
+  echo "loading gateware (${OV_PKG:-bundled ov3.fwpkg}) ..."
+  python3 "$HOST/ovctl.py" ${OV_PKG:+--pkg "$OV_PKG"} -l -C \
+      2>&1 | tee "${TAG}.load.log" | grep -E "Bitstream timestamp|error|Error" || true
+fi
+
 # --- start the capture ---------------------------------------------------
 if command -v tcpdump >/dev/null; then
   CAP=(tcpdump -i "usbmon${BUS}" -s 0 -U -w "${TAG}.pcap")
@@ -93,11 +103,11 @@ fi
 
 # --- verdicts --------------------------------------------------------
 echo
-BITS="$(grep -m1 'Bitstream timestamp' "${TAG}.client.log" || true)"
+BITS="$(grep -m1 'Bitstream timestamp' "${TAG}.load.log" "${TAG}.client.log" 2>/dev/null | head -1 || true)"
 if [ -n "$BITS" ]; then
   echo "gateware: ${BITS#*Bitstream }"
 else
-  echo "gateware: FPGA not reconfigured this run -- check with: ovctl.py --pkg <fwpkg> -C"
+  echo "gateware: unknown (NO_LOAD set and no reconfigure this run)"
 fi
 
 echo
