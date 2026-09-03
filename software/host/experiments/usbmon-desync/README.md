@@ -79,8 +79,11 @@ hardware, run it to sanity-check the reframer on any machine.
 ## Notes
 
 - `mincapture.py` is a ~90-line stand-in for `ov_snapshot.py`: open device,
+  drop LibOV's verbose per-packet printer (`rxcsniff.service.handlers = []`),
   enable SDRAM ring + `CSTREAM_CFG` bit 0 (stream) + bit 2 (NAK filter), sleep,
-  tear down. No status loop.
+  tear down. No status loop. Keeping the verbose printer makes the consumer slow
+  enough to starve the framing thread on its own -- both clients here run quiet
+  (`ovctl` via `--format custom`) so the only variable is the CSR status loop.
 - usbmon timestamps every URB, so if out-of-order **completion** is the
   mechanism it should also be visible directly in the pcap (compare URB `id`
   submission vs completion order in Wireshark).

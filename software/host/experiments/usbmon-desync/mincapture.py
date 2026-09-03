@@ -92,6 +92,14 @@ def main():
     secs = float(sys.argv[1]) if len(sys.argv) > 1 else 20.0
 
     dev = open_device()
+
+    # Drop LibOV's default per-packet verbose printer (USBInterpreter). Leaving
+    # it in makes the consumer slow enough to starve the __comms framing thread
+    # -- the classic "slow consumer desyncs, fast consumer is clean" effect --
+    # which would confound the bisect. ov_snapshot.py does the same. The outer
+    # framer still runs and still prints "Unmatched byte" on a real desync.
+    dev.rxcsniff.service.handlers = []
+
     setup(dev)
     print("capturing for %.1f s with the NAK filter on, zero register I/O ..."
           % secs, flush=True)
