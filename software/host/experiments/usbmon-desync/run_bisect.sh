@@ -102,12 +102,14 @@ fi
 
 echo
 echo "=== client-side (LibOV live framing) ==="
-CLIENT_UM=$(grep -c "Unmatched byte" "${TAG}.client.log" || true)
+# match LibOV's exact message, not our own summary line that quotes the phrase
+UM_RE='Unmatched byte [0-9a-fA-F]+ - discarding'
+CLIENT_UM=$(grep -cE "$UM_RE" "${TAG}.client.log" || true)
 CLIENT_ASSERT=$(grep -cE "assert r_addr|AssertionError|ProtocolError" "${TAG}.client.log" || true)
 echo "client rc            : $CLIENT_RC"
 echo "'Unmatched byte' lines: $CLIENT_UM"
 echo "assert/protocol errors: $CLIENT_ASSERT"
-[ "$CLIENT_UM" != 0 ] && grep -m3 "Unmatched byte" "${TAG}.client.log" | sed 's/^/  /' || true
+[ "$CLIENT_UM" != 0 ] && grep -m3 -E "$UM_RE" "${TAG}.client.log" | sed 's/^/  /' || true
 
 echo
 echo "=== usbmon reframe (offline, kernel completion order) ==="
