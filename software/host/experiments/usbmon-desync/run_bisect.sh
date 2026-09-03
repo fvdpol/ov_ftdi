@@ -70,24 +70,33 @@ if ! kill -0 $CAP_PID 2>/dev/null; then
 fi
 
 # --- run the client ----------------------------------------------------
-echo "client: $MODE  (${SECS}s, --filter-nak)"
+# Keep only the lines that matter (desync, crash, bitstream id, PERR) so the
+# log stays small even when --format verbose dumps hundreds of MB of decode.
+KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR'
+OVCTL_FORMAT="${OVCTL_FORMAT:-custom}"    # custom = quiet; verbose = the original #25 repro
+echo "client: $MODE  (${SECS}s, --filter-nak${MODE:+, format=$OVCTL_FORMAT})"
 set +e
 case "$MODE" in
   mincapture)
     # quiet consumer, no register I/O in the window
-    python3 "$HERE/mincapture.py" "$SECS"        >"${TAG}.client.log" 2>&1
+    python3 "$HERE/mincapture.py" "$SECS" 2>&1 \
+        | grep -aE "$KEEP" > "${TAG}.client.log"
+    CLIENT_RC=${PIPESTATUS[0]}
     ;;
   ovctl)
-    # --format custom drops the verbose USBInterpreter printer, so the ONLY
-    # difference from mincapture is ovctl's ~1 Hz CSR status loop.
-    timeout "$((SECS + 5))" python3 "$HOST/ovctl.py" sniff hs --filter-nak \
-        --format custom --out "${TAG}.ovctl.bin" \
-        --timeout "$SECS"                        >"${TAG}.client.log" 2>&1
+    # ovctl's ~1 Hz CSR status loop is the variable under test. --format custom
+    # keeps it quiet (only the status loop differs from mincapture); --format
+    # verbose reproduces the exact condition #25 was reported under.
+    fmt_args=(--format "$OVCTL_FORMAT")
+    [ "$OVCTL_FORMAT" != verbose ] && fmt_args+=(--out "${TAG}.ovctl.bin")
+    timeout "$((SECS + 8))" python3 "$HOST/ovctl.py" sniff hs --filter-nak \
+        "${fmt_args[@]}" --timeout "$SECS" 2>&1 \
+        | grep -aE "$KEEP" > "${TAG}.client.log"
+    CLIENT_RC=${PIPESTATUS[0]}
     ;;
   *)
     echo "unknown mode '$MODE' (use: mincapture | ovctl)"; exit 2 ;;
 esac
-CLIENT_RC=$?
 set -e
 
 sleep 1
