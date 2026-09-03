@@ -41,13 +41,16 @@ is enough to detect a desync.
 
 ## Prerequisites
 
-- **Latest `master` gateware.** The FPGA must be running a fresh build of the
-  current `master` bitstream — earlier builds miss SSN/SSO drive-strength
-  improvements, and any board-side conclusion drawn against old gateware is
-  suspect. Rebuild `ov3.fwpkg` (or the `.bit`) from `master` and either replace
-  `software/host/ov3.fwpkg`, point `OV_PKG` at your package, or `ovctl.py -l` /
-  `-f` to force-load it before running the experiment. Record the bitstream
-  timestamp printed at load in the results.
+- **Current `master` gateware.** Earlier builds miss the SSN/SSO drive-strength
+  reductions, so a board-side conclusion drawn against old gateware is suspect.
+  The vendor-bundled `software/host/ov3.fwpkg` is a 2024 build — do **not** run
+  the experiment against it. Build a fresh one on the ISE host
+  (`cd ~/xilinx-ise_14.7 && ./run.sh make`, output
+  `software/fpga/ov3/build/ov3/ov3.fwpkg`) and either copy it over
+  `software/host/ov3.fwpkg` or point `OV_PKG` / `ovctl.py --pkg` at it. Load it
+  once with `ovctl.py --pkg <fwpkg> -l` (the run scripts then reuse whatever is
+  on the FPGA). `run_bisect.sh` echoes the bitstream timestamp it sees — record
+  it with every result.
 - Root (usbmon), `tcpdump`.
 - A configured OpenVizsla with a NAK-heavy High-Speed DUT (makes the effect
   obvious within seconds for the `ovctl` case). The V3 enumerates as

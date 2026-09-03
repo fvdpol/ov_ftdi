@@ -93,6 +93,14 @@ fi
 
 # --- verdicts --------------------------------------------------------
 echo
+BITS="$(grep -m1 'Bitstream timestamp' "${TAG}.client.log" || true)"
+if [ -n "$BITS" ]; then
+  echo "gateware: ${BITS#*Bitstream }"
+else
+  echo "gateware: FPGA not reconfigured this run -- check with: ovctl.py --pkg <fwpkg> -C"
+fi
+
+echo
 echo "=== client-side (LibOV live framing) ==="
 CLIENT_UM=$(grep -c "Unmatched byte" "${TAG}.client.log" || true)
 CLIENT_ASSERT=$(grep -cE "assert r_addr|AssertionError|ProtocolError" "${TAG}.client.log" || true)
