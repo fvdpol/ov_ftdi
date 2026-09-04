@@ -36,7 +36,11 @@ if [ "$GATEWARE_TAG" = untagged ]; then
        "whatever) so runs group correctly in aggregate.py." >&2
 fi
 RELOAD_TAG="reload"; [ "${NO_LOAD:-0}" = 1 ] && RELOAD_TAG="noload"
-SCENARIO="${GATEWARE_TAG}_${RELOAD_TAG}_nak${FILTER_NAK:-1}_sof${FILTER_SOF:-0}"
+# MODE is part of the scenario key: mincapture (no CSR I/O) is the clean
+# reference and is expected to stay desync-free, so it must never share a
+# scenario bucket with ovctl (CSR poll on, the actual #25 repro) -- mixing
+# them would silently dilute the ovctl desync rate.
+SCENARIO="${MODE}_${GATEWARE_TAG}_${RELOAD_TAG}_nak${FILTER_NAK:-1}_sof${FILTER_SOF:-0}"
 echo "scenario: $SCENARIO  (batch: ${BATCH:-<none>})"
 
 # OpenVizsla V3 enumerates with its programmed EEPROM id, not the bare FT2232H
