@@ -101,11 +101,18 @@ def main():
 
     blips = [r for r in rows if r.get("inner_first_offset_pct") is not None]
     if blips:
-        print("\ninner-layer event onset, as %% into the capture (2026-09-04: "
-              "is this late-onset, or does duration not matter?):")
+        import datetime
+        print("\ninner-layer event onset -- exact byte, %% into the capture, "
+              "and usbmon wall-clock (2026-09-04: is this late-onset, or "
+              "does duration not matter?). Full pre/post frame context for "
+              "each is in results/blips/:")
         for r in sorted(blips, key=lambda r: r["inner_first_offset_pct"]):
-            print("  %5.1f%%  scenario=%s  tag=%s"
-                  % (r["inner_first_offset_pct"], r["scenario"], r["tag"]))
+            wc = r.get("inner_first_wallclock")
+            wc_str = (datetime.datetime.fromtimestamp(wc).isoformat(timespec="seconds")
+                      if wc is not None else "unknown")
+            print("  %5.1f%%  byte %-10s wallclock %s  scenario=%s  tag=%s"
+                  % (r["inner_first_offset_pct"], r.get("inner_first_offset"),
+                     wc_str, r["scenario"], r["tag"]))
 
     return 0
 

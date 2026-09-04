@@ -4,13 +4,64 @@
 Called by run_bisect.sh at the end of every run. Takes everything as argv
 (not shell-interpolated JSON) since some fields -- gateware-bitstream in
 particular -- are free-text device output that could otherwise break a
-heredoc. The manifest is append-only: re-running the same scenario later,
-in a new batch, just adds more rows -- see aggregate.py to sum it.
+heredoc. The manifest is append-only *for capture-time facts*: re-running the
+same scenario later, in a new batch, just adds more rows.
+
+The per-row fields split into two groups:
+  - capture-time facts (scenario, gateware, client behavior, ...) -- set once,
+    from the actual hardware run, never touched again.
+  - derived facts (verdict, event offsets, wallclock, loss-vs-insertion hint,
+    ...) -- everything reframe.py computes from the stored .pcap. These can
+    be recomputed at any time, from the same .pcap, with improved heuristics
+    -- see reprocess.py, which re-runs reframe.py against already-captured
+    pcaps and replaces only this half of each row. No hardware, no rig time.
 """
 
 import argparse
 import json
 import sys
+
+
+def derive_fields(reframe):
+    """Everything computable from a reframe.py --json-summary dict alone --
+    the half of a manifest row that reprocess.py is allowed to replace."""
+    outer, inner = reframe["outer"], reframe["inner"]
+    return {
+        "outer_verdict": outer["verdict"],
+        "inner_verdict": inner["verdict"],
+        "inner_unmatched": inner.get("unmatched", 0),
+        # Exact byte offset the framer tripped on, in the inner (whacker)
+        # stream and mapped back to the outer (wire) stream, plus how far
+        # into the capture that is as %% of that run's total inner-stream
+        # bytes -- lets aggregate.py show whether events cluster late (per
+        # Frank's 2026-09-04 observation: the 2 known events were at 59%/69%
+        # into their 60s runs, not near start). wallclock is the usbmon
+        # (kernel) completion time of the URB carrying that byte -- host
+        # wall-clock, not a device-side timestamp; the blip dump under
+        # results/blips/ has the full pre/post frame context either way.
+        "inner_first_offset": inner.get("first_offset"),
+        "inner_first_offset_outer": inner.get("first_offset_outer_offset"),
+        "inner_first_offset_pct": inner.get("first_offset_pct"),
+        "inner_first_wallclock": inner.get("wallclock"),
+        # A pcap can hold more than one desync event, especially at the
+        # longer (240s) run lengths -- see reframe.py's per-event blip dumps
+        # under results/blips/ for all of them, not just the first.
+        "inner_num_events": inner.get("num_events", 0),
+        "outer_num_events": outer.get("num_events", 0),
+        # loss-vs-insertion hint for the first inner event: True means the
+        # skipped bytes are a literal repeat of what preceded them (points at
+        # a stale re-read/duplicate rather than data going missing).
+        "inner_first_dup_of_preceding":
+            (inner.get("events") or [{}])[0].get("dup_of_preceding"),
+    }
+
+
+def load_reframe_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"outer": {"verdict": "NO_PCAP"}, "inner": {"verdict": "NO_PCAP"}}
 
 
 def main():
@@ -33,13 +84,10 @@ def main():
     ap.add_argument("--reframe-json", required=True)
     args = ap.parse_args()
 
-    try:
-        with open(args.reframe_json) as f:
-            reframe = json.load(f)
-    except FileNotFoundError:
-        reframe = {"outer": {"verdict": "NO_PCAP"}, "inner": {"verdict": "NO_PCAP"}}
+    reframe = load_reframe_json(args.reframe_json)
 
     rec = {
+        # --- capture-time facts: set once, from the hardware run ---
         "ts": args.ts,
         "scenario": args.scenario,
         "batch": args.batch or None,
@@ -54,16 +102,12 @@ def main():
         "client_rc": args.client_rc,
         "client_unmatched": args.client_unmatched,
         "client_assert": args.client_assert,
-        "outer_verdict": reframe["outer"]["verdict"],
-        "inner_verdict": reframe["inner"]["verdict"],
-        "inner_unmatched": reframe["inner"].get("unmatched", 0),
-        # how far into the capture the first inner-layer stray byte landed, as
-        # % of that run's total inner-stream bytes -- lets aggregate.py show
-        # whether events cluster late (per Frank's 2026-09-04 observation: the
-        # 2 known events were at 59%/69% into their 60s runs, not near start).
-        "inner_first_offset_pct": reframe["inner"].get("first_offset_pct"),
         "client_desynced": args.client_unmatched > 0,
     }
+    # --- derived facts: reframe.py's read of the stored pcap; reprocess.py
+    # is the supported way to replace these later without re-running hardware.
+    rec.update(derive_fields(reframe))
+
     with open(args.manifest, "a") as f:
         f.write(json.dumps(rec) + "\n")
     print("manifest: %s  (scenario=%s)" % (args.manifest, rec["scenario"]))

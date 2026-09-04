@@ -40,9 +40,15 @@ The FT2232H side mirrors ``software/host/fastftdi.c`` (ReadStreamCallback): ever
 """
 
 import argparse
+import bisect
 import collections
+import datetime
+import json
+import os
 import struct
 import sys
+
+import blip_classify
 
 # --- constants, from LibOV.py --------------------------------------------------
 MAX_PACKET_SIZE = 1027
@@ -96,10 +102,12 @@ def read_pcap_records(path):
 
 
 def iter_bulk_in(records):
-    """Yield (busnum, devnum, payload) for every bulk-IN completion with data."""
+    """Yield (busnum, devnum, ts_sec, ts_usec, payload) for every bulk-IN
+    completion with data. ts is the usbmon *completion* wall-clock time, i.e.
+    the kernel's clock at capture time -- not a device-side timestamp."""
     for endian, rec in records:
         (urb_id, ev_type, xfer, epnum, devnum, busnum, _setup_flag, _data_flag,
-         _ts_s, _ts_u, status, _urb_len, data_len) = struct.unpack(
+         ts_s, ts_u, status, _urb_len, data_len) = struct.unpack(
             endian + _USBMON_HDR, rec[:40])
 
         if xfer != 3:                       # bulk only
@@ -112,7 +120,44 @@ def iter_bulk_in(records):
             continue
         payload = rec[64:64 + data_len]
         if payload:
-            yield busnum, devnum, payload
+            yield busnum, devnum, ts_s, ts_u, payload
+
+
+def group_runs(unmatched):
+    """Group a flat `unmatched` list (each entry a single skipped byte, offsets
+    strictly increasing by however far walk() had to skip) into contiguous
+    runs -- one per distinct desync *event*. With longer captures a single
+    pcap can easily contain more than one event; each needs its own blip
+    dump, not just the first/last byte of the whole capture conflated
+    together."""
+    if not unmatched:
+        return []
+    runs = [[unmatched[0]]]
+    for prev, item in zip(unmatched, unmatched[1:]):
+        if item[0] == prev[0] + 1:
+            runs[-1].append(item)
+        else:
+            runs.append([item])
+    return runs
+
+
+def wallclock_at(chunk_meta, offset):
+    """usbmon completion wall-clock time (epoch seconds) of the URB covering
+    byte `offset` of the reframed outer stream, or None if out of range.
+    chunk_meta: parallel to the `chunks` list -- (start, end, ts_sec, ts_usec)
+    in outer-stream-offset space, in capture order. This is the *host kernel's*
+    clock at completion time, not a device-side timestamp -- see the note in
+    iter_bulk_in."""
+    if not chunk_meta:
+        return None
+    starts = [m[0] for m in chunk_meta]
+    i = bisect.bisect_right(starts, offset) - 1
+    if i < 0:
+        return None
+    start, end, ts_s, ts_u = chunk_meta[i]
+    if not (start <= offset < end):
+        return None
+    return ts_s + ts_u / 1e6
 
 
 def strip_ftdi(payload):
@@ -212,12 +257,17 @@ def walk(stream, skip_startup=True, collect_magic=None, context_frames=8):
 
     collect_magic: if set (e.g. 0xD0), also return the concatenated payloads of
     every frame with that magic, minus its 2-byte header -- i.e. the inner
-    whacker byte stream that LibOV's SDRAMReadService feeds to rxcsniff.
+    whacker byte stream that LibOV's SDRAMReadService feeds to rxcsniff. Also
+    returns `subpayload_segments`: (inner_start, inner_end, outer_start) for
+    every appended slice, so a byte offset in the inner stream can be mapped
+    back to where it lived in the outer stream (see outer_offset_of_inner).
 
     For each *run* of unmatched bytes, records the `context_frames` cleanly
-    parsed frames immediately preceding it -- (offset, name, size) -- keyed by
-    the offset of the run's first byte, in `unmatched_context`. Lets a caller
-    show "what packet pattern preceded this desync" instead of just raw hex.
+    parsed frames immediately preceding it in `unmatched_context`, and the
+    `context_frames` immediately following re-lock in `unmatched_post_context`
+    -- both (offset, name, size), keyed by the offset of the run's first byte.
+    Lets a caller show the packet pattern on both sides of a desync, not just
+    what preceded it.
     """
     n = len(stream)
     start = find_first_lock(stream) if skip_startup else 0
@@ -225,9 +275,14 @@ def walk(stream, skip_startup=True, collect_magic=None, context_frames=8):
     counts = collections.Counter()
     unmatched = []
     unmatched_context = {}
+    unmatched_post_context = {}
     recent = collections.deque(maxlen=context_frames)
     in_run = False
+    run_start = None
+    post_for = None
+    post_count = 0
     subpayload = bytearray() if collect_magic is not None else None
+    subpayload_segments = [] if collect_magic is not None else None
     c = start
     clean_frames_since_unmatched = 0
     while c < n:
@@ -235,25 +290,37 @@ def walk(stream, skip_startup=True, collect_magic=None, context_frames=8):
         if sz is None:
             if not in_run:
                 unmatched_context[c] = list(recent)
+                unmatched_post_context[c] = []
                 in_run = True
+                run_start = c
             unmatched.append((c, stream[c]))
             clean_frames_since_unmatched = 0
             c += 1
             continue
         if sz == _INCOMPLETE:
             break                       # trailing partial frame -- normal
-        in_run = False
+        if in_run:
+            in_run = False
+            post_for, post_count = run_start, 0
         counts[name] += 1
         clean_frames_since_unmatched += 1
         recent.append((c, name, sz))
+        if post_for is not None:
+            unmatched_post_context[post_for].append((c, name, sz))
+            post_count += 1
+            if post_count >= context_frames:
+                post_for = None
         if subpayload is not None and stream[c] == collect_magic:
+            seg_start = len(subpayload)
             subpayload += stream[c + 2:c + sz]
+            subpayload_segments.append((seg_start, len(subpayload), c + 2))
         c += sz
 
     return {
         "counts": dict(counts),
         "unmatched": unmatched,
         "unmatched_context": unmatched_context,
+        "unmatched_post_context": unmatched_post_context,
         "lead_skipped": start,
         "trailing": n - c,
         "total": n,
@@ -261,7 +328,25 @@ def walk(stream, skip_startup=True, collect_magic=None, context_frames=8):
         "recovered": bool(unmatched) and clean_frames_since_unmatched > 50,
         "clean_frames_after_last_unmatched": clean_frames_since_unmatched,
         "subpayload": bytes(subpayload) if subpayload is not None else None,
+        "subpayload_segments": subpayload_segments,
     }
+
+
+def outer_offset_of_inner(subpayload_segments, inner_offset):
+    """Map a byte offset in the inner (concatenated 0xD0-payload) stream back
+    to the position it came from in the outer stream -- so an inner-layer
+    event's wall-clock time can be looked up via the same usbmon chunk index
+    used for the outer layer. None if out of range (shouldn't happen)."""
+    if not subpayload_segments:
+        return None
+    starts = [s[0] for s in subpayload_segments]
+    i = bisect.bisect_right(starts, inner_offset) - 1
+    if i < 0:
+        return None
+    seg_start, seg_end, outer_start = subpayload_segments[i]
+    if not (seg_start <= inner_offset < seg_end):
+        return None
+    return outer_start + (inner_offset - seg_start)
 
 
 def inner_frame_size(b):
@@ -274,7 +359,8 @@ def inner_frame_size(b):
 
 
 def walk_inner(stream, context_frames=8):
-    """Walk the concatenated 0xD0 payloads as a pure rxcsniff record stream."""
+    """Walk the concatenated 0xD0 payloads as a pure rxcsniff record stream.
+    Same pre-/post-context tracking as walk() -- see its docstring."""
     n = len(stream)
     start = 0
     for c in range(min(n, 8192)):
@@ -286,8 +372,12 @@ def walk_inner(stream, context_frames=8):
     counts = collections.Counter()
     unmatched = []
     unmatched_context = {}
+    unmatched_post_context = {}
     recent = collections.deque(maxlen=context_frames)
     in_run = False
+    run_start = None
+    post_for = None
+    post_count = 0
     c = start
     clean_since = 0
     while c < n:
@@ -295,21 +385,31 @@ def walk_inner(stream, context_frames=8):
         if sz is None:
             if not in_run:
                 unmatched_context[c] = list(recent)
+                unmatched_post_context[c] = []
                 in_run = True
+                run_start = c
             unmatched.append((c, stream[c]))
             clean_since = 0
             c += 1
             continue
         if sz == _INCOMPLETE:
             break
-        in_run = False
+        if in_run:
+            in_run = False
+            post_for, post_count = run_start, 0
         counts[name] += 1
         clean_since += 1
         recent.append((c, name, sz))
+        if post_for is not None:
+            unmatched_post_context[post_for].append((c, name, sz))
+            post_count += 1
+            if post_count >= context_frames:
+                post_for = None
         c += sz
     return {
         "counts": dict(counts), "unmatched": unmatched,
-        "unmatched_context": unmatched_context, "lead_skipped": start,
+        "unmatched_context": unmatched_context,
+        "unmatched_post_context": unmatched_post_context, "lead_skipped": start,
         "trailing": n - c, "total": n,
         "recovered": bool(unmatched) and clean_since > 50,
         "clean_frames_after_last_unmatched": clean_since,
@@ -342,7 +442,7 @@ def main():
 
     # First pass: tally bulk-IN bytes per (bus, dev) so we can auto-pick.
     tally = collections.Counter()
-    for bus, dev, payload in iter_bulk_in(records):
+    for bus, dev, _ts_s, _ts_u, payload in iter_bulk_in(records):
         tally[(bus, dev)] += len(payload)
     if not tally:
         sys.exit("no bulk-IN completions with data in %s" % args.pcap)
@@ -357,12 +457,18 @@ def main():
         bus, dev = args.bus, args.dev
 
     # Second pass: concatenate that device's completions in capture order and
-    # strip FT2232H status bytes per URB.
+    # strip FT2232H status bytes per URB. chunk_meta tracks each completion's
+    # byte range in `stream` plus its usbmon wall-clock time, for wallclock_at.
     chunks = []
-    for b, d, payload in iter_bulk_in(records):
+    chunk_meta = []
+    pos = 0
+    for b, d, ts_s, ts_u, payload in iter_bulk_in(records):
         if (args.bus is None or b == bus) and (args.dev is None or d == dev):
             if b == bus and d == dev:
-                chunks.append(strip_ftdi(payload))
+                c = strip_ftdi(payload)
+                chunks.append(c)
+                chunk_meta.append((pos, pos + len(c), ts_s, ts_u))
+                pos += len(c)
     stream = b"".join(chunks)
 
     if args.dump_stream:
@@ -381,47 +487,121 @@ def main():
     print("trailing bytes    %d  (partial frame at EOF)" % res["trailing"])
 
     if args.dump_blips:
-        import os
         os.makedirs(args.dump_blips, exist_ok=True)
+    # Run identifier for blip filenames: run_bisect.sh names the pcap
+    # "<mode>-<timestamp>.pcap", so the basename IS the run tag -- put it in
+    # the filename so a directory listing alone tells you which run each
+    # blip came from, not just its (layer, offset).
+    run_label = os.path.splitext(os.path.basename(args.pcap))[0]
 
-    def verdict(label, layer_tag, r, buf):
+    def dump_one_event(layer_tag, buf, off0, offL, klen, is_last, tag,
+                        to_outer_offset, pre, post):
+        outer_off0 = to_outer_offset(off0)
+        wc = wallclock_at(chunk_meta, outer_off0) if outer_off0 is not None else None
+        wc_str = (datetime.datetime.fromtimestamp(wc).isoformat(timespec="microseconds")
+                  if wc is not None else "unknown")
+        print("%-14s DESYNC (%s) -- %d unmatched; first@%d last@%d; wallclock %s"
+              % (layer_tag + ":", tag, klen, off0, offL, wc_str))
+        print("               ctx first: %s"
+              % buf[max(0, off0 - 12):off0 + 12].hex(" "))
+
+        # Classification is cheap (only touches the small window around the
+        # trip point) so compute it regardless of --dump-blips; only writing
+        # the sidecar files to disk is conditional on that flag.
+        w = args.blip_window
+        lo, hi = max(0, off0 - w), min(len(buf), off0 + w)
+        window = buf[lo:hi]
+        trip_idx = off0 - lo
+        cls = blip_classify.classify_event(window, trip_idx, klen)
+        dup_of_preceding = cls["dup_of_preceding"]
+
+        if args.dump_blips:
+            base = os.path.join(args.dump_blips,
+                                 "%s_%s_blip_%d" % (run_label, layer_tag, off0))
+            with open(base + ".txt", "w") as f:
+                f.write("pcap: %s\n" % args.pcap)
+                f.write("layer: %s  offset (exact byte, this layer's stream): "
+                        "%d  outer-stream offset: %s  run length: %d bytes  "
+                        "verdict: %s  wallclock: %s\n"
+                        % (layer_tag, off0, outer_off0, klen, tag, wc_str))
+                f.write("skipped-run duplicates the %d bytes immediately "
+                        "preceding it: %s / immediately following it (post "
+                        "re-lock): %s  (loss-vs-insertion hint -- True leans "
+                        "'stale re-read / duplicate', False is uninformative "
+                        "either way, not evidence of loss)\n\n"
+                        % (klen, cls["dup_of_preceding"], cls["dup_of_following"]))
+                f.write("preceding %d parsed frames (offset, name, size):\n"
+                        % len(pre))
+                for o, name, sz in pre:
+                    f.write("  %8d  %-10s %d\n" % (o, name, sz))
+                f.write("\n>>> framer trips here: offset %d <<<\n\n" % off0)
+                f.write("following %d parsed frames after re-lock "
+                        "(offset, name, size):\n" % len(post))
+                for o, name, sz in post:
+                    f.write("  %8d  %-10s %d\n" % (o, name, sz))
+                f.write("\nhex, %d bytes before .. %d bytes after offset %d "
+                        "(trip point marked |><|):\n"
+                        % (off0 - lo, hi - off0, off0))
+                f.write(buf[lo:off0].hex(" ") + "  |><|  " + buf[off0:hi].hex(" ") + "\n")
+            # Small JSON sidecar carrying the same window + frame lists, for
+            # classify_blips.py to re-run classify_event() on later (e.g. a
+            # new heuristic) WITHOUT touching this .pcap again -- the sidecar
+            # is a few hundred bytes; the pcap can be gigabytes.
+            with open(base + ".json", "w") as f:
+                json.dump({
+                    "pcap": args.pcap, "layer": layer_tag, "run_label": run_label,
+                    "offset": off0, "last_offset": offL, "outer_offset": outer_off0,
+                    "run_length": klen, "verdict": tag, "wallclock": wc,
+                    "pre_frames": pre, "post_frames": post,
+                    "window_lo": lo, "window_hi": hi, "trip_idx": trip_idx,
+                    "window_hex": window.hex(),
+                    "classification": cls,
+                }, f)
+            print("               blip context: %s.{txt,json}  (dup-of-preceding: %s)"
+                  % (base, dup_of_preceding))
+        return {
+            "first_offset": off0, "last_offset": offL, "unmatched": klen,
+            "outer_offset": outer_off0,
+            "first_offset_pct": round(100.0 * off0 / len(buf), 1) if buf else None,
+            "wallclock": wc, "dup_of_preceding": dup_of_preceding,
+        }
+
+    def verdict(label, layer_tag, r, buf, to_outer_offset=lambda o: o):
         um = r["unmatched"]
         if not um:
             print("%-14s CLEAN" % label)
-            return 0, {"verdict": "CLEAN", "unmatched": 0}
-        off0 = um[0][0]
-        offL = um[-1][0]
+            return 0, {"verdict": "CLEAN", "unmatched": 0, "events": []}
+
+        runs = group_runs(um)
         tag = "RECOVERED" if r["recovered"] else "NEVER RECOVERED"
-        print("%-14s DESYNC (%s) -- %d unmatched; first@%d last@%d; "
-              "%d clean frames after last"
-              % (label, tag, len(um), off0, offL,
-                 r["clean_frames_after_last_unmatched"]))
-        print("               ctx first: %s"
-              % buf[max(0, off0 - 12):off0 + 12].hex(" "))
-        if args.dump_blips:
-            import os
-            w = args.blip_window
-            ctx = r.get("unmatched_context", {}).get(off0, [])
-            lo, hi = max(0, off0 - w), min(len(buf), off0 + w)
-            fname = os.path.join(args.dump_blips,
-                                  "%s_blip_%d.txt" % (layer_tag, off0))
-            with open(fname, "w") as f:
-                f.write("pcap: %s\n" % args.pcap)
-                f.write("layer: %s  offset: %d  run length: %d bytes  "
-                        "verdict: %s\n\n" % (layer_tag, off0, len(um), tag))
-                f.write("preceding %d parsed frames (offset, name, size):\n"
-                        % len(ctx))
-                for o, name, sz in ctx:
-                    f.write("  %8d  %-10s %d\n" % (o, name, sz))
-                f.write("\nhex, %d bytes before .. %d bytes after offset %d:\n"
-                        % (off0 - lo, hi - off0, off0))
-                f.write(buf[lo:hi].hex(" ") + "\n")
-            print("               blip context: %s" % fname)
+        if len(runs) > 1:
+            print("%-14s %d separate desync events in this capture "
+                  "(reporting each below)" % (label, len(runs)))
+        events = []
+        for i, run in enumerate(runs):
+            off0, offL = run[0][0], run[-1][0]
+            is_last = (i == len(runs) - 1)
+            # every run except the last is inherently followed by at least
+            # one successfully parsed frame (else it would have merged into
+            # the next run) -- only the last run's fate is "recovered" vs
+            # "never recovered" for the whole capture, per r["recovered"].
+            run_tag = tag if is_last else "RECOVERED"
+            pre = r.get("unmatched_context", {}).get(off0, [])
+            post = r.get("unmatched_post_context", {}).get(off0, [])
+            events.append(dump_one_event(layer_tag, buf, off0, offL, len(run),
+                                          is_last, run_tag, to_outer_offset,
+                                          pre, post))
+
+        first = events[0]
         summary = {
             "verdict": "RECOVERED" if r["recovered"] else "NEVER_RECOVERED",
-            "unmatched": len(um), "first_offset": off0, "last_offset": offL,
-            "first_offset_pct": round(100.0 * off0 / len(buf), 1) if buf else None,
+            "unmatched": len(um), "num_events": len(runs),
+            "first_offset": first["first_offset"], "last_offset": offL,
+            "first_offset_outer_offset": first["outer_offset"],
+            "first_offset_pct": first["first_offset_pct"],
+            "wallclock": first["wallclock"],
             "clean_frames_after_last": r["clean_frames_after_last_unmatched"],
+            "events": events,
         }
         return (0 if r["recovered"] else 1), summary
 
@@ -434,11 +614,12 @@ def main():
     print("=== inner whacker framing (0xD0 payloads -> rxcsniff records) ===")
     print("inner stream   %d bytes; frames %s"
           % (inner["total"], inner["counts"]))
-    inner_rc, inner_summary = verdict("inner:", "inner", inner,
-                                       res["subpayload"] or b"")
+    inner_rc, inner_summary = verdict(
+        "inner:", "inner", inner, res["subpayload"] or b"",
+        to_outer_offset=lambda o: outer_offset_of_inner(
+            res.get("subpayload_segments"), o))
 
     if args.json_summary:
-        import json
         with open(args.json_summary, "w") as f:
             json.dump({
                 "pcap": args.pcap, "reframed_bytes": res["total"],
