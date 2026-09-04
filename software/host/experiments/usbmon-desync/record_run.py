@@ -133,6 +133,14 @@ def main():
     ap.add_argument("--client-overflow-total", type=int, default=-1,
                     help="OVF_INSERT_NUM_TOTAL for this session (the denominator "
                          "the overflow count is out of); -1 = not reported")
+    ap.add_argument("--drain-wait", default="0",
+                    help="1 if mincapture.py's DRAIN_WAIT=1 teardown was used "
+                         "this run (#25, Tomasz: wait for HF0_LAST before "
+                         "releasing the SDRAM path)")
+    ap.add_argument("--drain-saw-last", type=int, default=-1,
+                    help="1 if HF0_LAST actually arrived within the drain "
+                         "timeout, 0 if it timed out waiting, -1 = drain_wait "
+                         "wasn't in effect this run")
     ap.add_argument("--reframe-json", required=True)
     args = ap.parse_args()
 
@@ -163,6 +171,13 @@ def main():
                                    if args.client_overflow_events >= 0 else None),
         "client_overflow_total": (args.client_overflow_total
                                   if args.client_overflow_total >= 0 else None),
+        # 2026-09-05, Tomasz: is the no-load desync caused by an incomplete
+        # drain at the previous session's teardown? drain_wait=True means
+        # THIS run's client waited for HF0_LAST before disabling the SDRAM
+        # path at ITS OWN teardown -- i.e. it's testing whether it protects
+        # the NEXT run in the same no-load sequence, not itself.
+        "drain_wait": args.drain_wait == "1",
+        "drain_saw_last": args.drain_saw_last if args.drain_saw_last >= 0 else None,
     }
     # --- derived facts: reframe.py's read of the stored pcap; reprocess.py
     # is the supported way to replace these later without re-running hardware.

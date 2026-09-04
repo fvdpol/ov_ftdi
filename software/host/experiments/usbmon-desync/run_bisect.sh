@@ -44,7 +44,10 @@ RELOAD_TAG="reload"; [ "${NO_LOAD:-0}" = 1 ] && RELOAD_TAG="noload"
 # start), so run length is itself a variable under test -- a 60s and a 240s
 # run must not be pooled into one rate, or a duration-dependent onset would
 # get silently averaged away.
-SCENARIO="${MODE}_${GATEWARE_TAG}_${RELOAD_TAG}_nak${FILTER_NAK:-1}_sof${FILTER_SOF:-0}_${SECS}s"
+# drain<N> only appears when DRAIN_WAIT=1 is actually set, so it doesn't
+# change existing scenario names for anyone not using this knob.
+DRAIN_TAG=""; [ "${DRAIN_WAIT:-0}" = 1 ] && DRAIN_TAG="_drain1"
+SCENARIO="${MODE}_${GATEWARE_TAG}_${RELOAD_TAG}_nak${FILTER_NAK:-1}_sof${FILTER_SOF:-0}_${SECS}s${DRAIN_TAG}"
 echo "scenario: $SCENARIO  (batch: ${BATCH:-<none>})"
 
 # OpenVizsla V3 enumerates with its programmed EEPROM id, not the bare FT2232H
@@ -98,21 +101,25 @@ fi
 # --- run the client ----------------------------------------------------
 # Keep only the lines that matter (desync, crash, bitstream id, PERR) so the
 # log stays small even when --format verbose dumps hundreds of MB of decode.
-KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR|[0-9]+ overflow, [0-9a-fA-F]+ total'
+KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR|[0-9]+ overflow, [0-9a-fA-F]+ total|^drain: '
 OVCTL_FORMAT="${OVCTL_FORMAT:-custom}"    # custom = quiet; verbose = the original #25 repro
 FILTER_NAK="${FILTER_NAK:-1}"            # 1 = --filter-nak (default); 0 = off
 FILTER_SOF="${FILTER_SOF:-0}"           # 1 = --filter-sof: drops SOF only, keeps the
 #   NAK storm -> DENSE stream. Use FILTER_NAK=0 FILTER_SOF=1 to test whether a dense
 #   stream self-heals a bad start where the sparse --filter-nak stream does not.
+DRAIN_WAIT="${DRAIN_WAIT:-0}"            # 1 = mincapture waits for HF0_LAST at teardown
+#   before releasing the SDRAM path (#25, Tomasz: incomplete-drain-as-stale-data check).
+#   Only meaningful for mincapture; only interesting to test with NO_LOAD=1 (reload
+#   already wipes everything, so a prior session's drain state can't matter there).
 nak_args=()
 [ "$FILTER_NAK" = 1 ] && nak_args+=(--filter-nak)
 [ "$FILTER_SOF" = 1 ] && nak_args+=(--filter-sof)
-echo "client: $MODE  (${SECS}s, filter_nak=$FILTER_NAK filter_sof=$FILTER_SOF, format=$OVCTL_FORMAT, no_load=${NO_LOAD:-0})"
+echo "client: $MODE  (${SECS}s, filter_nak=$FILTER_NAK filter_sof=$FILTER_SOF, format=$OVCTL_FORMAT, no_load=${NO_LOAD:-0}, drain_wait=$DRAIN_WAIT)"
 set +e
 case "$MODE" in
   mincapture)
     # quiet consumer, no register I/O in the window
-    FILTER_NAK="$FILTER_NAK" python3 "$HERE/mincapture.py" "$SECS" 2>&1 \
+    FILTER_NAK="$FILTER_NAK" DRAIN_WAIT="$DRAIN_WAIT" python3 "$HERE/mincapture.py" "$SECS" 2>&1 \
         | grep -aE "$KEEP" > "${TAG}.client.log"
     CLIENT_RC=${PIPESTATUS[0]}
     ;;
@@ -178,6 +185,18 @@ if [ -n "$OVF_LINE" ]; then
 fi
 echo "overflow events       : $CLIENT_OVF_EVENTS  (of $CLIENT_OVF_TOTAL RX-path words this session; -1 = not reported)"
 
+# DRAIN_WAIT=1 result -- did mincapture.py actually see HF0_LAST before
+# tearing down the SDRAM path? -1 = not applicable (DRAIN_WAIT wasn't set).
+DRAIN_SAW_LAST=-1
+if [ "${DRAIN_WAIT:-0}" = 1 ]; then
+  if grep -q "^drain: saw HF0_LAST" "${TAG}.client.log"; then
+    DRAIN_SAW_LAST=1
+  else
+    DRAIN_SAW_LAST=0
+  fi
+  echo "drain wait             : $(grep '^drain: ' "${TAG}.client.log" || echo 'no drain: line found')"
+fi
+
 echo
 echo "=== usbmon reframe (offline, kernel completion order) ==="
 python3 "$HERE/reframe.py" "${TAG}.pcap" --dump-blips "$OUT/blips" \
@@ -232,6 +251,7 @@ python3 "$HERE/record_run.py" \
     --client-assert "$CLIENT_ASSERT" \
     --client-overflow-events "$CLIENT_OVF_EVENTS" \
     --client-overflow-total "$CLIENT_OVF_TOTAL" \
+    --drain-wait "${DRAIN_WAIT:-0}" --drain-saw-last "$DRAIN_SAW_LAST" \
     --reframe-json "${TAG}.reframe.json"
 
 # Recorded either way (the row above is written regardless) -- this exit

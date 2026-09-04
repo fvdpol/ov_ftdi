@@ -12,12 +12,23 @@ LibOV frames the stream on its own thread and prints ``Unmatched byte ..`` to
 stdout if it desyncs. Expected here: silent.
 
     ./mincapture.py [seconds]        # default 20
+    DRAIN_WAIT=1 ./mincapture.py [seconds]   # wait for HF0_LAST before teardown
+
+DRAIN_WAIT (#25, Tomasz 2026-09-05: "do you wait for a last packet indicator
+before releasing the FTDI interface?") tests whether an INCOMPLETE drain at
+one session's teardown is what causes the next no-load session's desync:
+disables CSTREAM_CFG first (the edge that stuffs the HF0_LAST marker), then
+actively waits (DRAIN_TIMEOUT seconds, default 2.0) for that marker to
+actually arrive before disabling the SDRAM sink/host-read path -- the
+reverse of the order used when DRAIN_WAIT is unset, which shuts off the
+path that would carry HF0_LAST before the marker is even generated.
 
 Run it with usbmon capturing in parallel -- see run_bisect.sh / README.md.
 """
 
 import os
 import sys
+import threading
 import time
 import zipfile
 
@@ -102,9 +113,36 @@ def teardown(dev):
     total = dev.regs.OVF_INSERT_NUM_TOTAL.rd()
     print("%d overflow, %08x total" % (ovf, total), flush=True)
 
-    dev.regs.SDRAM_SINK_GO.wr(0)
-    dev.regs.SDRAM_HOST_READ_GO.wr(0)
-    dev.regs.CSTREAM_CFG.wr(0)
+    # Tomasz, 2026-09-05 (#25): "do you actually wait for last packet
+    # indicator after stopping capture before releasing FTDI interface?" --
+    # DRAIN_WAIT=1 tests that directly (env-gated so the established
+    # baseline behavior is unchanged by default). HF0_LAST is a marker
+    # packet the gateware stuffs on CSTREAM_CFG's 1->0 edge (producer.py) --
+    # disabling CSTREAM_CFG *before* the SDRAM sink/host-read path is the
+    # order that lets that marker actually get carried out and drained;
+    # the reverse (what this function did until now) shuts the carrying
+    # path off before the marker even exists.
+    if os.getenv("DRAIN_WAIT", "0") == "1":
+        drain_timeout = float(os.getenv("DRAIN_TIMEOUT", "2.0"))
+        seen_last = threading.Event()
+
+        def _watch_for_last(ts, pkt, flags, orig_len):
+            if flags & LibOV.HF0_LAST:
+                seen_last.set()
+
+        dev.rxcsniff.service.handlers = [_watch_for_last]
+        dev.regs.CSTREAM_CFG.wr(0)
+        got_it = seen_last.wait(timeout=drain_timeout)
+        dev.rxcsniff.service.handlers = []
+        print("drain: %s HF0_LAST within %.1fs"
+              % ("saw" if got_it else "TIMED OUT waiting for", drain_timeout),
+              flush=True)
+        dev.regs.SDRAM_SINK_GO.wr(0)
+        dev.regs.SDRAM_HOST_READ_GO.wr(0)
+    else:
+        dev.regs.SDRAM_SINK_GO.wr(0)
+        dev.regs.SDRAM_HOST_READ_GO.wr(0)
+        dev.regs.CSTREAM_CFG.wr(0)
 
 
 def main():
