@@ -89,6 +89,39 @@ both verdicts. To reframe an existing capture:
 that `reframe.py` reconstructs it and flags a deliberate 1-byte deletion — no
 hardware, run it to sanity-check the reframer on any machine.
 
+## Tracking runs across scenarios and batches
+
+With several gateware builds and several sniff settings under test at once,
+every invocation of `run_bisect.sh` is tagged with a **scenario** — built from
+`GATEWARE_TAG` (required — a short name like `master`, `bundled`, or
+`tmon-filternak`), whether the sniff reloaded the bitstream (`NO_LOAD`), and
+the filter flags (`FILTER_NAK`/`FILTER_SOF`) — and appends one line to
+`results/manifest.jsonl` recording the scenario, the client's live desync
+result, and the offline reframe verdict for both layers. The manifest is
+**append-only**: it is never rewritten, so re-running the same scenario later
+(a different day, to widen a thin sample) just adds more rows to it — nothing
+needs to be merged by hand. Tag a set of runs with `BATCH=<label>` if you want
+to be able to filter to just that run later; it's metadata only, aggregation
+is per-scenario by default and spans every batch.
+
+```sh
+GATEWARE_TAG=master   OV_PKG=~/ov_ftdi/software/host/ov3.fwpkg \
+    BATCH=20260905-tomasz-recheck sudo -E ./run_bisect.sh ovctl 60
+GATEWARE_TAG=master NO_LOAD=1 BATCH=20260905-tomasz-recheck sudo -E ./run_bisect.sh ovctl 60
+
+./aggregate.py                              # every scenario, every batch so far
+./aggregate.py --scenario master_reload_nak1_sof0
+./aggregate.py --batch 20260905-tomasz-recheck
+./aggregate.py --list-batches
+```
+
+`aggregate.py` reports N / desync count / rate per scenario, plus a count of
+runs where the *wire* (not just the live client) desynced — those are worth a
+second look since they're a stronger claim than the usual self-healing blip.
+`--dump-blips results/blips` (on by default in `run_bisect.sh`) writes one
+context file per desync event — the preceding parsed-frame sequence plus hex
+around the offset — for looking at whether a packet pattern precedes it.
+
 ## Notes
 
 - `mincapture.py` is a ~90-line stand-in for `ov_snapshot.py`: open device,

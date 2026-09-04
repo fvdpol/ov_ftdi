@@ -9,6 +9,13 @@
 #   sudo ./run_bisect.sh ovctl      [seconds]     # ovctl.py sniff (CSR poll on)
 #
 # Needs root (usbmon), tcpdump, and a configured OpenVizsla on the bus.
+#
+# --- run tracking ---------------------------------------------------------
+# Every run is tagged with a SCENARIO (what's under test) and appends one
+# line to results/manifest.jsonl (never overwritten -- re-running the same
+# scenario later just adds more samples to it). GATEWARE_TAG is required so
+# scenario names stay stable and human-readable; see aggregate.py to sum
+# manifest.jsonl into per-scenario hit rates across every batch so far.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,6 +27,17 @@ MODE="${1:-mincapture}"
 SECS="${2:-20}"
 TS="$(date +%Y%m%dT%H%M%SZ)"
 TAG="$OUT/${MODE}-${TS}"
+
+GATEWARE_TAG="${GATEWARE_TAG:-untagged}"
+BATCH="${BATCH:-}"
+if [ "$GATEWARE_TAG" = untagged ]; then
+  echo "WARNING: GATEWARE_TAG not set -- manifest entry will be scenario" \
+       "'untagged_...'. Set GATEWARE_TAG=bundled|master|tmon-filternak (or" \
+       "whatever) so runs group correctly in aggregate.py." >&2
+fi
+RELOAD_TAG="reload"; [ "${NO_LOAD:-0}" = 1 ] && RELOAD_TAG="noload"
+SCENARIO="${GATEWARE_TAG}_${RELOAD_TAG}_nak${FILTER_NAK:-1}_sof${FILTER_SOF:-0}"
+echo "scenario: $SCENARIO  (batch: ${BATCH:-<none>})"
 
 # OpenVizsla V3 enumerates with its programmed EEPROM id, not the bare FT2232H
 # 0403:6010. Override with OV_VIDPID if your board differs.
@@ -139,7 +157,24 @@ echo "assert/protocol errors: $CLIENT_ASSERT"
 
 echo
 echo "=== usbmon reframe (offline, kernel completion order) ==="
-python3 "$HERE/reframe.py" "${TAG}.pcap" | tee "${TAG}.verdict.txt"
+python3 "$HERE/reframe.py" "${TAG}.pcap" --dump-blips "$OUT/blips" \
+    --json-summary "${TAG}.reframe.json" \
+    | tee "${TAG}.verdict.txt"
 
 echo
 echo "artifacts: ${TAG}.{pcap,client.log,verdict.txt}"
+
+# --- manifest -----------------------------------------------------------
+# One JSON line per run, appended -- never rewritten -- so this is safe to
+# call across many separate batches/sessions and just accumulates. This is
+# the source of truth for aggregate.py, independent of any per-run text log.
+# Fields passed as argv (not interpolated into the script) since $BITS is
+# free-text device output and could otherwise break the heredoc.
+python3 "$HERE/record_run.py" \
+    --manifest "$OUT/manifest.jsonl" \
+    --ts "$TS" --scenario "$SCENARIO" --batch "$BATCH" \
+    --gateware-tag "$GATEWARE_TAG" --gateware-bitstream "$BITS" \
+    --reload "$RELOAD_TAG" --filter-nak "${FILTER_NAK:-1}" \
+    --filter-sof "${FILTER_SOF:-0}" --mode "$MODE" --secs "$SECS" --tag "$TAG" \
+    --client-rc "$CLIENT_RC" --client-unmatched "$CLIENT_UM" \
+    --client-assert "$CLIENT_ASSERT" --reframe-json "${TAG}.reframe.json"

@@ -22,6 +22,7 @@ LINKTYPE_USB_LINUX_MMAPPED (220). Standard library only.
     ./reframe.py cap.pcap --bus 3 --dev 7        # pin the device
     ./reframe.py cap.pcap --dump-stream s.bin    # also write the reframed stream
     ./reframe.py cap.pcap --no-skip-startup      # do not hunt for first lock
+    ./reframe.py cap.pcap --dump-blips results/blips  # per-desync context dump
 
 Framing mirrors ``software/host/LibOV.py`` in this repo:
 
@@ -206,32 +207,45 @@ def find_first_lock(stream):
     return 0
 
 
-def walk(stream, skip_startup=True, collect_magic=None):
+def walk(stream, skip_startup=True, collect_magic=None, context_frames=8):
     """Walk `stream` with the LibOV outer service framing.
 
     collect_magic: if set (e.g. 0xD0), also return the concatenated payloads of
     every frame with that magic, minus its 2-byte header -- i.e. the inner
     whacker byte stream that LibOV's SDRAMReadService feeds to rxcsniff.
+
+    For each *run* of unmatched bytes, records the `context_frames` cleanly
+    parsed frames immediately preceding it -- (offset, name, size) -- keyed by
+    the offset of the run's first byte, in `unmatched_context`. Lets a caller
+    show "what packet pattern preceded this desync" instead of just raw hex.
     """
     n = len(stream)
     start = find_first_lock(stream) if skip_startup else 0
 
     counts = collections.Counter()
     unmatched = []
+    unmatched_context = {}
+    recent = collections.deque(maxlen=context_frames)
+    in_run = False
     subpayload = bytearray() if collect_magic is not None else None
     c = start
     clean_frames_since_unmatched = 0
     while c < n:
         name, sz = frame_size(stream[c:c + MAX_PACKET_SIZE + 8])
         if sz is None:
+            if not in_run:
+                unmatched_context[c] = list(recent)
+                in_run = True
             unmatched.append((c, stream[c]))
             clean_frames_since_unmatched = 0
             c += 1
             continue
         if sz == _INCOMPLETE:
             break                       # trailing partial frame -- normal
+        in_run = False
         counts[name] += 1
         clean_frames_since_unmatched += 1
+        recent.append((c, name, sz))
         if subpayload is not None and stream[c] == collect_magic:
             subpayload += stream[c + 2:c + sz]
         c += sz
@@ -239,6 +253,7 @@ def walk(stream, skip_startup=True, collect_magic=None):
     return {
         "counts": dict(counts),
         "unmatched": unmatched,
+        "unmatched_context": unmatched_context,
         "lead_skipped": start,
         "trailing": n - c,
         "total": n,
@@ -258,7 +273,7 @@ def inner_frame_size(b):
     return frame_size(b)
 
 
-def walk_inner(stream):
+def walk_inner(stream, context_frames=8):
     """Walk the concatenated 0xD0 payloads as a pure rxcsniff record stream."""
     n = len(stream)
     start = 0
@@ -270,22 +285,31 @@ def walk_inner(stream):
                 break
     counts = collections.Counter()
     unmatched = []
+    unmatched_context = {}
+    recent = collections.deque(maxlen=context_frames)
+    in_run = False
     c = start
     clean_since = 0
     while c < n:
         name, sz = inner_frame_size(stream[c:c + MAX_PACKET_SIZE + 8])
         if sz is None:
+            if not in_run:
+                unmatched_context[c] = list(recent)
+                in_run = True
             unmatched.append((c, stream[c]))
             clean_since = 0
             c += 1
             continue
         if sz == _INCOMPLETE:
             break
+        in_run = False
         counts[name] += 1
         clean_since += 1
+        recent.append((c, name, sz))
         c += sz
     return {
-        "counts": dict(counts), "unmatched": unmatched, "lead_skipped": start,
+        "counts": dict(counts), "unmatched": unmatched,
+        "unmatched_context": unmatched_context, "lead_skipped": start,
         "trailing": n - c, "total": n,
         "recovered": bool(unmatched) and clean_since > 50,
         "clean_frames_after_last_unmatched": clean_since,
@@ -302,6 +326,16 @@ def main():
                     help="write the reframed (FT2232H-stripped) byte stream")
     ap.add_argument("--no-skip-startup", action="store_true",
                     help="do not hunt for the first framing lock")
+    ap.add_argument("--dump-blips", metavar="DIR",
+                    help="for every desync run, write the preceding frame "
+                         "pattern + surrounding hex to DIR/<layer>_blip_<off>.txt "
+                         "(#25: 'is there a packet stream pattern where it "
+                         "happens')")
+    ap.add_argument("--blip-window", type=int, default=256,
+                    help="bytes of hex context on each side of a blip (default 256)")
+    ap.add_argument("--json-summary", metavar="FILE",
+                    help="write a one-line JSON verdict summary to FILE, for "
+                         "run_bisect.sh to fold into results/manifest.jsonl")
     args = ap.parse_args()
 
     records = list(read_pcap_records(args.pcap))
@@ -346,11 +380,15 @@ def main():
           % (res["counts"], sum(res["counts"].values())))
     print("trailing bytes    %d  (partial frame at EOF)" % res["trailing"])
 
-    def verdict(label, r, buf):
+    if args.dump_blips:
+        import os
+        os.makedirs(args.dump_blips, exist_ok=True)
+
+    def verdict(label, layer_tag, r, buf):
         um = r["unmatched"]
         if not um:
             print("%-14s CLEAN" % label)
-            return 0
+            return 0, {"verdict": "CLEAN", "unmatched": 0}
         off0 = um[0][0]
         offL = um[-1][0]
         tag = "RECOVERED" if r["recovered"] else "NEVER RECOVERED"
@@ -360,18 +398,51 @@ def main():
                  r["clean_frames_after_last_unmatched"]))
         print("               ctx first: %s"
               % buf[max(0, off0 - 12):off0 + 12].hex(" "))
-        return 0 if r["recovered"] else 1
+        if args.dump_blips:
+            import os
+            w = args.blip_window
+            ctx = r.get("unmatched_context", {}).get(off0, [])
+            lo, hi = max(0, off0 - w), min(len(buf), off0 + w)
+            fname = os.path.join(args.dump_blips,
+                                  "%s_blip_%d.txt" % (layer_tag, off0))
+            with open(fname, "w") as f:
+                f.write("pcap: %s\n" % args.pcap)
+                f.write("layer: %s  offset: %d  run length: %d bytes  "
+                        "verdict: %s\n\n" % (layer_tag, off0, len(um), tag))
+                f.write("preceding %d parsed frames (offset, name, size):\n"
+                        % len(ctx))
+                for o, name, sz in ctx:
+                    f.write("  %8d  %-10s %d\n" % (o, name, sz))
+                f.write("\nhex, %d bytes before .. %d bytes after offset %d:\n"
+                        % (off0 - lo, hi - off0, off0))
+                f.write(buf[lo:hi].hex(" ") + "\n")
+            print("               blip context: %s" % fname)
+        summary = {
+            "verdict": "RECOVERED" if r["recovered"] else "NEVER_RECOVERED",
+            "unmatched": len(um), "first_offset": off0, "last_offset": offL,
+            "clean_frames_after_last": r["clean_frames_after_last_unmatched"],
+        }
+        return (0 if r["recovered"] else 1), summary
 
     print()
     print("=== outer 0xD0 / service framing (the wire layer) ===")
-    outer_rc = verdict("outer:", res, stream)
+    outer_rc, outer_summary = verdict("outer:", "outer", res, stream)
 
     inner = walk_inner(res["subpayload"] or b"")
     print()
     print("=== inner whacker framing (0xD0 payloads -> rxcsniff records) ===")
     print("inner stream   %d bytes; frames %s"
           % (inner["total"], inner["counts"]))
-    inner_rc = verdict("inner:", inner, res["subpayload"] or b"")
+    inner_rc, inner_summary = verdict("inner:", "inner", inner,
+                                       res["subpayload"] or b"")
+
+    if args.json_summary:
+        import json
+        with open(args.json_summary, "w") as f:
+            json.dump({
+                "pcap": args.pcap, "reframed_bytes": res["total"],
+                "outer": outer_summary, "inner": inner_summary,
+            }, f)
 
     print()
     if not outer_rc and not inner_rc:
