@@ -420,6 +420,7 @@ def main():
         summary = {
             "verdict": "RECOVERED" if r["recovered"] else "NEVER_RECOVERED",
             "unmatched": len(um), "first_offset": off0, "last_offset": offL,
+            "first_offset_pct": round(100.0 * off0 / len(buf), 1) if buf else None,
             "clean_frames_after_last": r["clean_frames_after_last_unmatched"],
         }
         return (0 if r["recovered"] else 1), summary

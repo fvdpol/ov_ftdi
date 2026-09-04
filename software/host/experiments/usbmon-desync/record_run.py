@@ -57,6 +57,11 @@ def main():
         "outer_verdict": reframe["outer"]["verdict"],
         "inner_verdict": reframe["inner"]["verdict"],
         "inner_unmatched": reframe["inner"].get("unmatched", 0),
+        # how far into the capture the first inner-layer stray byte landed, as
+        # % of that run's total inner-stream bytes -- lets aggregate.py show
+        # whether events cluster late (per Frank's 2026-09-04 observation: the
+        # 2 known events were at 59%/69% into their 60s runs, not near start).
+        "inner_first_offset_pct": reframe["inner"].get("first_offset_pct"),
         "client_desynced": args.client_unmatched > 0,
     }
     with open(args.manifest, "a") as f:

@@ -99,6 +99,14 @@ def main():
         for r in never:
             print("  %s  scenario=%s  tag=%s" % (r["ts"], r["scenario"], r["tag"]))
 
+    blips = [r for r in rows if r.get("inner_first_offset_pct") is not None]
+    if blips:
+        print("\ninner-layer event onset, as %% into the capture (2026-09-04: "
+              "is this late-onset, or does duration not matter?):")
+        for r in sorted(blips, key=lambda r: r["inner_first_offset_pct"]):
+            print("  %5.1f%%  scenario=%s  tag=%s"
+                  % (r["inner_first_offset_pct"], r["scenario"], r["tag"]))
+
     return 0
 
 

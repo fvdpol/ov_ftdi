@@ -39,8 +39,12 @@ RELOAD_TAG="reload"; [ "${NO_LOAD:-0}" = 1 ] && RELOAD_TAG="noload"
 # MODE is part of the scenario key: mincapture (no CSR I/O) is the clean
 # reference and is expected to stay desync-free, so it must never share a
 # scenario bucket with ovctl (CSR poll on, the actual #25 repro) -- mixing
-# them would silently dilute the ovctl desync rate.
-SCENARIO="${MODE}_${GATEWARE_TAG}_${RELOAD_TAG}_nak${FILTER_NAK:-1}_sof${FILTER_SOF:-0}"
+# them would silently dilute the ovctl desync rate. SECS is part of it too:
+# the known desync events landed at 59%/69% into a 60s run (not near the
+# start), so run length is itself a variable under test -- a 60s and a 240s
+# run must not be pooled into one rate, or a duration-dependent onset would
+# get silently averaged away.
+SCENARIO="${MODE}_${GATEWARE_TAG}_${RELOAD_TAG}_nak${FILTER_NAK:-1}_sof${FILTER_SOF:-0}_${SECS}s"
 echo "scenario: $SCENARIO  (batch: ${BATCH:-<none>})"
 
 # OpenVizsla V3 enumerates with its programmed EEPROM id, not the bare FT2232H
