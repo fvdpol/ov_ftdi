@@ -544,8 +544,19 @@ def main():
         lo, hi = max(0, off0 - w), min(len(buf), off0 + w)
         window = buf[lo:hi]
         trip_idx = off0 - lo
-        cls = blip_classify.classify_event(window, trip_idx, klen)
+        cls = blip_classify.classify_event(window, trip_idx, klen, window_lo=lo,
+                                           pre_frames=pre, post_frames=post)
         dup_of_preceding = cls["dup_of_preceding"]
+        sof_gap = cls["sof_frame_gap"]
+        print("               loss-vs-insertion: dup_pre=%s dup_post=%s  "
+              "last_pre_pid=%s first_post_pid=%s (valid=%s)  "
+              "SOF frame gap=%s  device-time gap=%s us (typical ~%s us)"
+              % (cls["dup_of_preceding"], cls["dup_of_following"],
+                 cls["last_pre_pid"], cls["first_post_pid"],
+                 cls["first_post_pid_valid"],
+                 sof_gap if sof_gap is not None else "no SOF nearby",
+                 "%.1f" % cls["gap_delta_ts_us"] if cls["gap_delta_ts_us"] is not None else "?",
+                 "%.1f" % cls["typical_delta_ts_us"] if cls["typical_delta_ts_us"] is not None else "?"))
 
         if args.dump_blips:
             base = os.path.join(args.dump_blips,
@@ -560,8 +571,28 @@ def main():
                         "preceding it: %s / immediately following it (post "
                         "re-lock): %s  (loss-vs-insertion hint -- True leans "
                         "'stale re-read / duplicate', False is uninformative "
-                        "either way, not evidence of loss)\n\n"
+                        "either way, not evidence of loss)\n"
                         % (klen, cls["dup_of_preceding"], cls["dup_of_following"]))
+                f.write("last PID before gap: %s -- first PID after gap: %s "
+                        "(structurally valid PID byte: %s; False means this "
+                        "isn't a genuine packet boundary -- either a false-"
+                        "positive relock, or the payload is corrupted past "
+                        "just the framing)\n"
+                        % (cls["last_pre_pid"], cls["first_post_pid"],
+                           cls["first_post_pid_valid"]))
+                f.write("SOF frame-number gap across the gap: %s  (a real "
+                        "USB sequence number, increments by 1 every 125us; "
+                        "1 = nothing macroscopic missing here, >1 lower-"
+                        "bounds how many microframes of real traffic did)\n"
+                        % (sof_gap if sof_gap is not None else "n/a (no SOF "
+                           "packet within the saved window on one or both sides)"))
+                f.write("device-clock time from the last pre-gap packet to "
+                        "the first post-gap one: %s us (typical inter-packet "
+                        "gap nearby: ~%s us) -- from each packet's own "
+                        "delta-timestamp, independent of how many bytes were "
+                        "skipped to get here\n\n"
+                        % ("%.2f" % cls["gap_delta_ts_us"] if cls["gap_delta_ts_us"] is not None else "?",
+                           "%.2f" % cls["typical_delta_ts_us"] if cls["typical_delta_ts_us"] is not None else "?"))
                 f.write("preceding %d parsed frames (offset, name, size):\n"
                         % len(pre))
                 for o, name, sz in pre:
@@ -596,6 +627,12 @@ def main():
             "outer_offset": outer_off0,
             "first_offset_pct": round(100.0 * off0 / len(buf), 1) if buf else None,
             "wallclock": wc, "dup_of_preceding": dup_of_preceding,
+            "dup_of_following": cls["dup_of_following"],
+            "last_pre_pid": cls["last_pre_pid"], "first_post_pid": cls["first_post_pid"],
+            "first_post_pid_valid": cls["first_post_pid_valid"],
+            "sof_frame_gap": sof_gap,
+            "gap_delta_ts_us": cls["gap_delta_ts_us"],
+            "typical_delta_ts_us": cls["typical_delta_ts_us"],
         }
 
     def verdict(label, layer_tag, r, buf, to_outer_offset=lambda o: o):

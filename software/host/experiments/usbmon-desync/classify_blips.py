@@ -49,7 +49,9 @@ def main():
         with open(path) as f:
             ev = json.load(f)
         window = bytes.fromhex(ev["window_hex"])
-        new_cls = blip_classify.classify_event(window, ev["trip_idx"], ev["run_length"])
+        new_cls = blip_classify.classify_event(
+            window, ev["trip_idx"], ev["run_length"], window_lo=ev["window_lo"],
+            pre_frames=ev.get("pre_frames"), post_frames=ev.get("post_frames"))
         old_cls = ev.get("classification", {})
         if new_cls != old_cls:
             changed += 1

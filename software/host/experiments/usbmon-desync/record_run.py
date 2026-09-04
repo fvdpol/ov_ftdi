@@ -48,11 +48,22 @@ def derive_fields(reframe):
         # under results/blips/ for all of them, not just the first.
         "inner_num_events": inner.get("num_events", 0),
         "outer_num_events": outer.get("num_events", 0),
-        # loss-vs-insertion hint for the first inner event: True means the
-        # skipped bytes are a literal repeat of what preceded them (points at
-        # a stale re-read/duplicate rather than data going missing).
+        # loss-vs-insertion hints for the first inner event -- see
+        # blip_classify.classify_event: dup_of_preceding/_following (a
+        # literal byte repeat, leans insertion/stale-reread), whether the
+        # first packet after re-lock has a structurally valid USB PID (False
+        # means the "relock" isn't a genuine packet boundary), and the SOF
+        # frame-number gap across it -- an actual USB sequence number: 1 (or
+        # None/no-SOF-nearby) is uninformative-to-mild, >1 lower-bounds real
+        # missing traffic.
         "inner_first_dup_of_preceding":
             (inner.get("events") or [{}])[0].get("dup_of_preceding"),
+        "inner_first_dup_of_following":
+            (inner.get("events") or [{}])[0].get("dup_of_following"),
+        "inner_first_post_pid_valid":
+            (inner.get("events") or [{}])[0].get("first_post_pid_valid"),
+        "inner_first_sof_frame_gap":
+            (inner.get("events") or [{}])[0].get("sof_frame_gap"),
         # In-band HF0_OVF / PERR flag tally, decoded straight from the wire
         # bytes in the .pcap -- unlike client_overflow_events (the CSR-based
         # count, capture-time only), this is a *derived* field: computable

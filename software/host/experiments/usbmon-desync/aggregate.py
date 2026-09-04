@@ -157,9 +157,32 @@ def main():
             wc = r.get("inner_first_wallclock")
             wc_str = (datetime.datetime.fromtimestamp(wc).isoformat(timespec="seconds")
                       if wc is not None else "unknown")
-            print("  %5.1f%%  byte %-10s wallclock %s  scenario=%s  tag=%s"
+            sof_gap = r.get("inner_first_sof_frame_gap")
+            print("  %5.1f%%  byte %-10s wallclock %s  SOF-gap=%-4s  scenario=%s  tag=%s"
                   % (r["inner_first_offset_pct"], r.get("inner_first_offset"),
-                     wc_str, r["scenario"], r["tag"]))
+                     wc_str, sof_gap if sof_gap is not None else "?",
+                     r["scenario"], r["tag"]))
+
+    # SOF-gap > 1 is the strongest signal this harness computes for real
+    # traffic having gone missing (an actual USB sequence number, not a
+    # heuristic) -- and an invalid post-relock PID means the "recovery"
+    # itself may be a coincidental false-positive, not a genuine boundary.
+    loss_evidence = [r for r in rows if (r.get("inner_first_sof_frame_gap") or 0) > 1]
+    bad_relock = [r for r in rows if r.get("inner_first_post_pid_valid") is False]
+    if loss_evidence:
+        print("\n%d run(s) with a SOF frame-number gap >1 across the first inner "
+              "event -- real traffic (not just bytes) looks to have gone "
+              "missing there:" % len(loss_evidence))
+        for r in loss_evidence:
+            print("  gap=%-4s  scenario=%s  tag=%s"
+                  % (r["inner_first_sof_frame_gap"], r["scenario"], r["tag"]))
+    if bad_relock:
+        print("\n%d run(s) where the byte right after re-lock is NOT a "
+              "structurally valid USB PID -- the 'recovery' may be a "
+              "coincidental false-positive, not a genuine packet boundary:"
+              % len(bad_relock))
+        for r in bad_relock:
+            print("  scenario=%s  tag=%s" % (r["scenario"], r["tag"]))
 
     return 0
 
