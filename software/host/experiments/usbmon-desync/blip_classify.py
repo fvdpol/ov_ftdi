@@ -60,33 +60,48 @@ def decode_frame_packet(frame_bytes):
     """frame_bytes: the raw bytes of one rxcsniff record (magic byte through
     its end), sliced from a saved window. None for non-packet records
     (0xA1/0xAC/0xAD carry no PID/timestamp -- see reframe.py's frame_size).
-    Mirrors LibOV.py's __RXCSniffService.consume() layout exactly."""
+    Mirrors LibOV.py's __RXCSniffService.consume() layout exactly.
+
+    IMPORTANT: the "stuffed" HF0_FIRST/HF0_LAST marker packet the gateware
+    inserts on a CSTREAM_CFG edge (producer.py) carries orig_len == 0 -- no
+    USB payload at all, no PID byte to decode -- so pid/sof info is only
+    ever added when a payload is actually present. flags/delta_ts must
+    still be decoded unconditionally: they're in the record header, not the
+    payload, and are exactly how FIRST/LAST get seen at all. An earlier
+    version of this function returned None whenever there was no payload,
+    silently hiding every FIRST/LAST marker in the whole dataset -- caught
+    2026-09-05 when a "clean reload" capture, which should show exactly one
+    of each, likewise showed zero, deployed via reprocess.py/aggregate.py
+    which build on the fields this function returns.
+    """
     if not frame_bytes or frame_bytes[0] not in (0xA0, 0xA2) or len(frame_bytes) < 4:
         return None
     delta_ts_len = (frame_bytes[3] >> 5) + 1
     pkt_start = 4 + delta_ts_len
-    if len(frame_bytes) <= pkt_start:
+    if len(frame_bytes) < pkt_start:
         return None
     delta_ts = 0
     for i in range(delta_ts_len):
         delta_ts |= frame_bytes[4 + i] << (8 * i)
-    pid_byte = frame_bytes[pkt_start]
-    valid = pid_valid(pid_byte)
     flags = frame_bytes[1]
     out = {
-        "pid_byte": pid_byte, "pid_name": USB_PID_NAMES.get(pid_byte),
-        "pid_valid": valid,
         "delta_ts": delta_ts, "delta_ts_us": delta_ts / (DEVICE_CLOCK_HZ / 1e6),
         "flags": flags,
         "is_first": bool(flags & HF0_FIRST), "is_last": bool(flags & HF0_LAST),
         "is_ovf": bool(flags & HF0_OVF), "is_perr": bool(flags & HF0_PERR_MASK),
+        "pid_byte": None, "pid_name": None, "pid_valid": None,
     }
+    if len(frame_bytes) > pkt_start:
+        pid_byte = frame_bytes[pkt_start]
+        valid = pid_valid(pid_byte)
+        out["pid_byte"], out["pid_name"], out["pid_valid"] = (
+            pid_byte, USB_PID_NAMES.get(pid_byte), valid)
     # SOF: PID(1) + 11-bit frame number (byte0 + low 3 bits of byte1) +
     # CRC5 (top 5 bits of byte1). A real, protocol-level sequence number --
     # increments every 125us on the wire, and we don't filter SOF -- so its
     # continuity across a gap is checkable independent of anything the
     # capture framework itself tracks.
-    if valid and pid_byte == 0xA5 and len(frame_bytes) >= pkt_start + 3:
+    if out["pid_valid"] and out["pid_byte"] == 0xA5 and len(frame_bytes) >= pkt_start + 3:
         b1, b2 = frame_bytes[pkt_start + 1], frame_bytes[pkt_start + 2]
         out["sof_frame_num"] = b1 | ((b2 & 0x07) << 8)
     return out
