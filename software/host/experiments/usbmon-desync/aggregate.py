@@ -164,21 +164,27 @@ def main():
     # Session start/end markers (2026-09-05, Tomasz: "where is the capture
     # start marker?" -- checking for stale data from a prior session, since
     # LibOV won't process anything before its own session's HF0_FIRST).
-    # Healthy: exactly 1 FIRST near 0%, exactly 1 LAST near the end.
+    # Healthy: exactly 1 FIRST at/near packet #1, exactly 1 LAST. Packet
+    # ordinal, not a percentage (Frank: more meaningful, and a percentage
+    # rounds away a very real offset on a multi-million-packet capture).
     marker_rows = [r for r in rows if r.get("inner_first_marker_count") is not None]
     marker_issues = [r for r in marker_rows if
                       r["inner_first_marker_count"] != 1
-                      or (r.get("inner_first_marker_offset_pct") or 0) > 1.0
+                      or (r.get("inner_first_marker_packet_num") or 999999999) > 3
                       or r.get("inner_last_marker_count") != 1]
     if marker_rows:
         print("\nsession markers (HF0_FIRST/HF0_LAST): %d/%d run(s) look off "
-              "(not exactly 1 FIRST near 0%%, or not exactly 1 LAST):"
+              "(not exactly 1 FIRST at/near packet #1, or not exactly 1 LAST):"
               % (len(marker_issues), len(marker_rows)))
         for r in marker_issues:
-            print("  FIRST count=%s @%s%%  LAST count=%s  scenario=%s  tag=%s"
+            print("  FIRST count=%-3s packet#=%-10s byte=%-12s  LAST count=%-3s "
+                  "packet#=%-10s  scenario=%s  tag=%s"
                   % (r.get("inner_first_marker_count"),
-                     r.get("inner_first_marker_offset_pct"),
-                     r.get("inner_last_marker_count"), r["scenario"], r["tag"]))
+                     r.get("inner_first_marker_packet_num"),
+                     r.get("inner_first_marker_offset"),
+                     r.get("inner_last_marker_count"),
+                     r.get("inner_last_marker_packet_num"),
+                     r["scenario"], r["tag"]))
 
     # 2026-09-04 postmortem: 56/64 runs in one batch quietly captured USB
     # background chatter instead of real DUT traffic after the DUT dropped

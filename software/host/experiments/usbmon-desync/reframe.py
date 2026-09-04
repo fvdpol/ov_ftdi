@@ -465,9 +465,9 @@ def walk_inner(stream, context_frames=8):
                 if pkt["is_perr"]:
                     perr_packets += 1
                 if pkt["is_first"]:
-                    first_offsets.append(c)
+                    first_offsets.append((c, packets_total))
                 if pkt["is_last"]:
-                    last_offsets.append(c)
+                    last_offsets.append((c, packets_total))
         if post_for is not None:
             unmatched_post_context[post_for].append((c, name, sz))
             post_count += 1
@@ -514,16 +514,17 @@ def walk_inner(stream, context_frames=8):
         "perr_packets": perr_packets,
         # Session start/end markers (2026-09-05, Tomasz: "where is the
         # capture start marker?"). Healthy expectation: exactly one FIRST at
-        # (or very near) offset 0 of the parsed range, one LAST at (or very
-        # near) the end -- more/fewer/misplaced is itself a finding. offset
-        # is relative to `start` (the parser's own lock point), matching how
-        # first_offset_pct is computed elsewhere.
+        # (or very near) the start of the parsed range, one LAST near the
+        # end -- more/fewer/misplaced is itself a finding. Reported as both
+        # exact byte offset and packet ordinal (Frank: packet number is more
+        # meaningful than a percentage on a multi-million-packet capture,
+        # and avoids the "0.0%" rounding hiding a very real offset).
         "first_marker_count": len(first_offsets),
-        "first_marker_offset": first_offsets[0] if first_offsets else None,
-        "first_marker_offset_pct": (round(100.0 * (first_offsets[0] - start) / span, 2)
-                                    if first_offsets else None),
+        "first_marker_offset": first_offsets[0][0] if first_offsets else None,
+        "first_marker_packet_num": first_offsets[0][1] if first_offsets else None,
         "last_marker_count": len(last_offsets),
-        "last_marker_offset": last_offsets[-1] if last_offsets else None,
+        "last_marker_offset": last_offsets[-1][0] if last_offsets else None,
+        "last_marker_packet_num": last_offsets[-1][1] if last_offsets else None,
     }
 
 
@@ -775,11 +776,12 @@ def main():
           % (inner["total"], inner["counts"]))
     print("in-band flags  %d packets, %d HF0_OVF, %d PERR (any problem flag)"
           % (inner["packets_total"], inner["overflow_packets"], inner["perr_packets"]))
-    print("session markers %d HF0_FIRST (first @ offset %s, %s%% into stream), "
-          "%d HF0_LAST (last @ offset %s)  -- healthy = exactly 1 each, FIRST near 0%%"
-          % (inner["first_marker_count"], inner["first_marker_offset"],
-             inner["first_marker_offset_pct"], inner["last_marker_count"],
-             inner["last_marker_offset"]))
+    print("session markers %d HF0_FIRST (packet #%s, byte %s), "
+          "%d HF0_LAST (packet #%s, byte %s)  -- healthy = exactly 1 each, "
+          "FIRST at/near packet #1"
+          % (inner["first_marker_count"], inner["first_marker_packet_num"],
+             inner["first_marker_offset"], inner["last_marker_count"],
+             inner["last_marker_packet_num"], inner["last_marker_offset"]))
     inner_rc, inner_summary = verdict(
         "inner:", "inner", inner, res["subpayload"] or b"",
         to_outer_offset=lambda o: outer_offset_of_inner(

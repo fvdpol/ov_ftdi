@@ -96,9 +96,10 @@ def derive_fields(reframe):
         # itself worth a look.
         "inner_first_marker_count": inner.get("first_marker_count"),
         "inner_first_marker_offset": inner.get("first_marker_offset"),
-        "inner_first_marker_offset_pct": inner.get("first_marker_offset_pct"),
+        "inner_first_marker_packet_num": inner.get("first_marker_packet_num"),
         "inner_last_marker_count": inner.get("last_marker_count"),
         "inner_last_marker_offset": inner.get("last_marker_offset"),
+        "inner_last_marker_packet_num": inner.get("last_marker_packet_num"),
     }
 
 
