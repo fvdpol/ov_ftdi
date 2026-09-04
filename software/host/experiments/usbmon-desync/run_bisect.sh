@@ -187,6 +187,35 @@ python3 "$HERE/reframe.py" "${TAG}.pcap" --dump-blips "$OUT/blips" \
 echo
 echo "artifacts: ${TAG}.{pcap,client.log,verdict.txt}"
 
+# --- traffic sanity check -------------------------------------------------
+# 2026-09-04: a 3.5h autonomous matrix quietly captured ~100-200 B/s of USB
+# background chatter (SOF/keepalive only) for 56 of 64 runs after the DUT
+# silently dropped off mid-batch -- outer/inner reframe both came back
+# CLEAN, so nothing else in this script would have noticed. Every real
+# scenario measured so far ran >=1 MB/s; fail fast instead of burning hours
+# against a dead DUT. MIN_TRAFFIC_BPS is overridable, not a hard science.
+MIN_TRAFFIC_BPS="${MIN_TRAFFIC_BPS:-50000}"
+read -r REFRAMED_BYTES TRAFFIC_BPS TRAFFIC_SANE <<PYEOF
+$(python3 -c "
+import json
+d = json.load(open('${TAG}.reframe.json'))
+b = d.get('reframed_bytes') or 0
+secs = ${SECS} if ${SECS} > 0 else 1
+bps = b / secs
+print(b, int(bps), 1 if bps >= ${MIN_TRAFFIC_BPS} else 0)
+")
+PYEOF
+echo
+echo "traffic sanity        : ${TRAFFIC_BPS} bytes/s (${REFRAMED_BYTES} bytes over ${SECS}s;" \
+     "want >= ${MIN_TRAFFIC_BPS} B/s)"
+if [ "$TRAFFIC_SANE" = 0 ]; then
+  echo "WARNING: this looks like USB background chatter, not a real DUT session --" >&2
+  echo "         is the DUT still connected and actually streaming? (2026-09-04" >&2
+  echo "         postmortem: this exact signature meant the Jockey3 had silently" >&2
+  echo "         disconnected). Override with MIN_TRAFFIC_BPS=0 if this scenario" >&2
+  echo "         is genuinely supposed to be this quiet." >&2
+fi
+
 # --- manifest -----------------------------------------------------------
 # One JSON line per run, appended -- never rewritten -- so this is safe to
 # call across many separate batches/sessions and just accumulates. This is
@@ -204,3 +233,10 @@ python3 "$HERE/record_run.py" \
     --client-overflow-events "$CLIENT_OVF_EVENTS" \
     --client-overflow-total "$CLIENT_OVF_TOTAL" \
     --reframe-json "${TAG}.reframe.json"
+
+# Recorded either way (the row above is written regardless) -- this exit
+# code is purely a signal for an orchestrator to stop the whole batch rather
+# than burn hours on the remaining cells. See run_matrix2_resumable.sh.
+if [ "$TRAFFIC_SANE" = 0 ]; then
+  exit 3
+fi

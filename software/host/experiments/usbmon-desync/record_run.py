@@ -27,6 +27,11 @@ def derive_fields(reframe):
     the half of a manifest row that reprocess.py is allowed to replace."""
     outer, inner = reframe["outer"], reframe["inner"]
     return {
+        # Total bytes usbmon captured for this run -- the traffic-sanity
+        # check run_bisect.sh does live (exit 3 if too quiet, see its
+        # MIN_TRAFFIC_BPS comment) is recomputable from this + secs at any
+        # time, e.g. by aggregate.py, without hardcoding a threshold here.
+        "reframed_bytes": reframe.get("reframed_bytes"),
         "outer_verdict": outer["verdict"],
         "inner_verdict": inner["verdict"],
         "inner_unmatched": inner.get("unmatched", 0),

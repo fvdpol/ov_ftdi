@@ -52,6 +52,10 @@ def main():
                          "nothing else) and exit -- e.g. for an orchestrator to "
                          "resume a scenario after N-already-done, rather than "
                          "restarting an interrupted experiment from scratch")
+    ap.add_argument("--min-traffic-bps", type=float, default=50000,
+                    help="flag runs below this reframed_bytes/secs rate as "
+                         "suspiciously quiet (default 50000 -- see run_bisect.sh's "
+                         "own live check, which uses the same default)")
     args = ap.parse_args()
 
     rows = load(args.manifest, count_mode=args.count)
@@ -133,6 +137,25 @@ def main():
         print("\nscenarios with overflow events -- sum and max, by source:")
         for scenario, label, total, mx in overflow_detail:
             print("  %-34s %-4s sum=%-10d max=%d" % (scenario, label, total, mx))
+
+    # 2026-09-04 postmortem: 56/64 runs in one batch quietly captured USB
+    # background chatter instead of real DUT traffic after the DUT dropped
+    # off mid-batch -- every other check in this report (desync rate,
+    # overflow, blips) stayed "clean" because there was nothing to desync
+    # on. run_bisect.sh now fails a run live (exit 3) below this same
+    # threshold, but flag it here too for anything captured before that, or
+    # with MIN_TRAFFIC_BPS overridden away at capture time.
+    quiet = [r for r in rows if r.get("reframed_bytes") is not None and r.get("secs")
+             and r["reframed_bytes"] / r["secs"] < args.min_traffic_bps]
+    if quiet:
+        print("\n%d run(s) captured suspiciously little traffic (< %.0f B/s) -- "
+              "likely a dead/disconnected DUT, NOT evidence of a clean run. "
+              "Treat these as invalid, not as \"no desync happened\":"
+              % (len(quiet), args.min_traffic_bps))
+        for r in quiet:
+            print("  %8.0f B/s  (%d bytes / %ss)  scenario=%s  tag=%s"
+                  % (r["reframed_bytes"] / r["secs"], r["reframed_bytes"], r["secs"],
+                     r["scenario"], r["tag"]))
 
     batches = sorted({r["batch"] or "(none)" for r in rows})
     if len(batches) > 1:
