@@ -381,6 +381,22 @@ def walk_inner(stream, context_frames=8):
     This is the recommended way to get an overflow count for a pcap
     captured before overflow tracking existed at all -- reprocess.py re-runs
     this walk against the *already-stored* .pcap, no hardware needed.
+
+    Frank's 2026-09-05 question -- with the overflow count looking high for
+    a --filter-nak run, is it real (missed traffic) or inflated (spuriously
+    flagged)? Confirmed from the gateware source: ovf_insert.py's
+    OverflowInserter sits UPSTREAM of the whole Whacker (producer -> filter_
+    nak -> filter_sof -> consumer, per whacker.py), triggered purely by
+    "the producer wasn't ready for the next ULPI byte right now" -- nothing
+    about filter_nak enters into it, so it firing under --filter-nak isn't
+    surprising by itself. What CAN be checked here: for every HF0_OVF packet,
+    the USB SOF frame-number gap either side of it (>1 = a real microframe
+    of traffic is unaccounted for, not just a marker; 0 or 1 = no
+    macroscopic loss signature at this point), and whether events cluster
+    late in the run (a "buffer fills up over time" pattern) or are steady
+    throughout (more consistent with a per-burst front-end limit,
+    independent of run length) -- overflow_quartile_counts splits the run
+    into 4 equal byte-offset quartiles and counts events in each.
     """
     n = len(stream)
     start = 0
@@ -400,6 +416,12 @@ def walk_inner(stream, context_frames=8):
     post_for = None
     post_count = 0
     packets_total = overflow_packets = perr_packets = 0
+    last_sof_num = None
+    pending_ovf = []           # overflow events awaiting the NEXT sof to resolve their gap
+    ovf_gap_counts = collections.Counter()   # {0: n, 1: n, ">1": n} -- >1 is the loss signature
+    ovf_gap_max = None
+    ovf_unresolved = 0         # no SOF seen again before EOF -- can't resolve, not evidence either way
+    ovf_offsets = []           # for the quartile/temporal-distribution check below
     c = start
     clean_since = 0
     while c < n:
@@ -425,8 +447,20 @@ def walk_inner(stream, context_frames=8):
         if stream[c] in (0xA0, 0xA2):        # full packet records carry flags @ b[1]
             packets_total += 1
             flags = stream[c + 1]
+            pkt = blip_classify.decode_frame_packet(stream[c:c + sz])
+            sof_num = pkt.get("sof_frame_num") if pkt else None
+            if sof_num is not None:
+                for pend_sof in pending_ovf:
+                    gap = (sof_num - pend_sof) % 2048 if pend_sof is not None else None
+                    ovf_gap_counts[gap if gap in (0, 1) else (">1" if gap is not None else "?")] += 1
+                    if gap is not None:
+                        ovf_gap_max = gap if ovf_gap_max is None else max(ovf_gap_max, gap)
+                pending_ovf = []
+                last_sof_num = sof_num
             if flags & HF0_OVF:
                 overflow_packets += 1
+                ovf_offsets.append(c)
+                pending_ovf.append(last_sof_num)
             if flags & HF0_PERR_MASK:
                 perr_packets += 1
         if post_for is not None:
@@ -435,6 +469,22 @@ def walk_inner(stream, context_frames=8):
             if post_count >= context_frames:
                 post_for = None
         c += sz
+    # Any overflow events still waiting for a following SOF at EOF simply
+    # ran out of stream to resolve against -- not evidence either way.
+    ovf_unresolved += len(pending_ovf)
+
+    # Temporal distribution: 4 equal byte-offset quartiles of the parsed
+    # range, each event counted by where its offset falls. Roughly even
+    # counts across quartiles argues for a steady, per-burst front-end
+    # limit (independent of how long the run has been going); counts that
+    # grow quartile-over-quartile would argue for something actually
+    # filling up over the run's duration.
+    span = max(1, n - start)
+    quartile_counts = [0, 0, 0, 0]
+    for off in ovf_offsets:
+        q = min(3, int(4 * (off - start) / span))
+        quartile_counts[q] += 1
+
     return {
         "counts": dict(counts), "unmatched": unmatched,
         "unmatched_context": unmatched_context,
@@ -443,6 +493,18 @@ def walk_inner(stream, context_frames=8):
         "recovered": bool(unmatched) and clean_since > 50,
         "clean_frames_after_last_unmatched": clean_since,
         "packets_total": packets_total,
+        # Loss-vs-inflated check for HF0_OVF events specifically (2026-09-05,
+        # Frank): "overflow_sof_gap_gt1" is the count with real evidence of
+        # missing traffic (a real USB sequence-number gap); "_le1" is the
+        # count with no such evidence (doesn't prove nothing was lost --
+        # SOF-gap can only see whole-microframe-scale loss -- just that
+        # nothing macroscopic was). "_unresolved" ran out of stream (no
+        # following SOF) before it could be checked either way.
+        "overflow_sof_gap_gt1": ovf_gap_counts[">1"],
+        "overflow_sof_gap_le1": ovf_gap_counts[0] + ovf_gap_counts[1],
+        "overflow_sof_gap_unresolved": ovf_unresolved,
+        "overflow_sof_gap_max": ovf_gap_max,
+        "overflow_quartile_counts": quartile_counts,
         "overflow_packets": overflow_packets,
         "perr_packets": perr_packets,
     }

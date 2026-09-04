@@ -138,6 +138,29 @@ def main():
         for scenario, label, total, mx in overflow_detail:
             print("  %-34s %-4s sum=%-10d max=%d" % (scenario, label, total, mx))
 
+    # Real-vs-inflated check for HF0_OVF (2026-09-05, Frank): does an SOF
+    # frame-number gap actually confirm missing traffic around these events,
+    # or does the overflow rate look inflated relative to what the wire
+    # shows? gt1 = real evidence of a missing microframe; le1 = none found
+    # (not proof nothing was lost -- SOF-gap is whole-microframe granularity
+    # -- just no macroscopic signature); unresolved = ran out of stream
+    # before a following SOF. quartiles: even spread across a run argues for
+    # a steady per-burst limit; back-loaded argues for something filling up
+    # over time (Frank's original working assumption for when overflow
+    # should appear at all).
+    ovf_sof = [r for r in rows if r.get("inner_overflow_packets")]
+    if ovf_sof:
+        print("\nHF0_OVF events -- SOF-gap real-vs-inflated check, and when in the run "
+              "they land (quartile 1..4):")
+        for r in ovf_sof:
+            q = r.get("inner_overflow_quartile_counts") or [0, 0, 0, 0]
+            print("  %-34s gt1=%-4s le1=%-6s unresolved=%-4s max_gap=%-4s "
+                  "quartiles=%s  tag=%s"
+                  % (r["scenario"], r.get("inner_overflow_sof_gap_gt1"),
+                     r.get("inner_overflow_sof_gap_le1"),
+                     r.get("inner_overflow_sof_gap_unresolved"),
+                     r.get("inner_overflow_sof_gap_max"), q, r["tag"]))
+
     # 2026-09-04 postmortem: 56/64 runs in one batch quietly captured USB
     # background chatter instead of real DUT traffic after the DUT dropped
     # off mid-batch -- every other check in this report (desync rate,

@@ -78,6 +78,17 @@ def derive_fields(reframe):
         "inner_packets_total": inner.get("packets_total"),
         "inner_overflow_packets": inner.get("overflow_packets"),
         "inner_perr_packets": inner.get("perr_packets"),
+        # Real-vs-inflated check for the HF0_OVF events specifically
+        # (2026-09-05, Frank -- is the overflow count real missed traffic,
+        # or spuriously flagged?): SOF frame-number gap either side of every
+        # flagged packet, plus which quarter of the run they land in (even
+        # spread -> a steady per-burst limit; back-loaded -> more like a
+        # buffer filling up over the run). See walk_inner()'s docstring.
+        "inner_overflow_sof_gap_gt1": inner.get("overflow_sof_gap_gt1"),
+        "inner_overflow_sof_gap_le1": inner.get("overflow_sof_gap_le1"),
+        "inner_overflow_sof_gap_unresolved": inner.get("overflow_sof_gap_unresolved"),
+        "inner_overflow_sof_gap_max": inner.get("overflow_sof_gap_max"),
+        "inner_overflow_quartile_counts": inner.get("overflow_quartile_counts"),
     }
 
 
