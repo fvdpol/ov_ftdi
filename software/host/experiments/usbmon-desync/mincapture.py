@@ -78,10 +78,12 @@ def setup(dev):
     # High Speed, non-drive.
     dev.ulpiregs.func_ctl.wr(0x48)
 
-    # CSTREAM_CFG bit 0 = stream enable, bit 2 = gateware NAK filter.
+    # CSTREAM_CFG bit 0 = stream enable, bit 2 = NAK filter, bit 3 = SOF filter.
     cfg = 1
     if os.getenv("FILTER_NAK", "1") == "1":
         cfg |= (1 << 2)
+    if os.getenv("FILTER_SOF", "0") == "1":
+        cfg |= (1 << 3)
     dev.regs.CSTREAM_CFG.wr(cfg)
 
 

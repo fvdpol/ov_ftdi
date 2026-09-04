@@ -74,9 +74,14 @@ fi
 # log stays small even when --format verbose dumps hundreds of MB of decode.
 KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR'
 OVCTL_FORMAT="${OVCTL_FORMAT:-custom}"    # custom = quiet; verbose = the original #25 repro
-FILTER_NAK="${FILTER_NAK:-1}"            # 1 = --filter-nak (default); 0 = unfiltered
-nak_args=(); [ "$FILTER_NAK" = 1 ] && nak_args=(--filter-nak)
-echo "client: $MODE  (${SECS}s, filter_nak=$FILTER_NAK, format=$OVCTL_FORMAT, no_load=${NO_LOAD:-0})"
+FILTER_NAK="${FILTER_NAK:-1}"            # 1 = --filter-nak (default); 0 = off
+FILTER_SOF="${FILTER_SOF:-0}"           # 1 = --filter-sof: drops SOF only, keeps the
+#   NAK storm -> DENSE stream. Use FILTER_NAK=0 FILTER_SOF=1 to test whether a dense
+#   stream self-heals a bad start where the sparse --filter-nak stream does not.
+nak_args=()
+[ "$FILTER_NAK" = 1 ] && nak_args+=(--filter-nak)
+[ "$FILTER_SOF" = 1 ] && nak_args+=(--filter-sof)
+echo "client: $MODE  (${SECS}s, filter_nak=$FILTER_NAK filter_sof=$FILTER_SOF, format=$OVCTL_FORMAT, no_load=${NO_LOAD:-0})"
 set +e
 case "$MODE" in
   mincapture)
