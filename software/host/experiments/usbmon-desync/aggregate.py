@@ -82,10 +82,11 @@ def main():
     for r in rows:
         by_scenario[r["scenario"]].append(r)
 
-    print("%-34s %5s %8s %8s %10s %10s %8s" %
-          ("scenario", "N", "desync", "rate", "inner_blip", "outer_bad", "ovf_runs"))
+    print("%-34s %5s %8s %8s %10s %10s %8s %8s" %
+          ("scenario", "N", "desync", "rate", "inner_blip", "outer_bad",
+           "ovf_csr", "ovf_pcap"))
     total_n = total_desync = 0
-    overflow_detail = []   # (scenario, sum_events, max_events) for the footer
+    overflow_detail = []   # (scenario, source, sum, max) for the footer
     for scenario in sorted(by_scenario):
         rs = by_scenario[scenario]
         n = len(rs)
@@ -94,29 +95,44 @@ def main():
                           if r["inner_verdict"] in ("RECOVERED", "NEVER_RECOVERED"))
         outer_bad = sum(1 for r in rs
                          if r["outer_verdict"] in ("RECOVERED", "NEVER_RECOVERED"))
-        # client_overflow_events: -1/absent (older rows, or a client that never
-        # reported) is "not measured", not zero -- keep those out of the count.
-        ovf_vals = [r.get("client_overflow_events") for r in rs
-                    if r.get("client_overflow_events") is not None]
-        ovf_runs = sum(1 for v in ovf_vals if v > 0)
+        # Two independent overflow sources, deliberately not merged into one
+        # column -- they measure different things (see aggregate --help /
+        # record_run.py) and can legitimately disagree:
+        #   ovf_csr  = client_overflow_events, the CSR hardware counter
+        #              (RX-path words dropped at ovf_insert.py); capture-time
+        #              only, absent for runs before that was added.
+        #   ovf_pcap = inner_overflow_packets, HF0_OVF decoded from the wire
+        #              bytes themselves (packets flagged downstream); works
+        #              for ANY captured pcap, old or new -- reprocess.py
+        #              backfills it for runs that predate ovf_csr entirely.
+        # -1/absent in either is "not measured", not zero.
+        for key, label in (("client_overflow_events", "csr"),
+                            ("inner_overflow_packets", "pcap")):
+            vals = [r.get(key) for r in rs if r.get(key) is not None]
+            runs_with = sum(1 for v in vals if v > 0)
+            col = "%d/%d" % (runs_with, len(vals)) if vals else "n/a"
+            if label == "csr":
+                ovf_csr_col = col
+            else:
+                ovf_pcap_col = col
+            if runs_with:
+                overflow_detail.append((scenario, label, sum(vals), max(vals)))
         total_n += n
         total_desync += desync
-        ovf_col = "%d/%d" % (ovf_runs, len(ovf_vals)) if ovf_vals else "n/a"
-        print("%-34s %5d %8d %7.0f%% %10d %10d %8s" %
-              (scenario, n, desync, 100.0 * desync / n, inner_blip, outer_bad, ovf_col))
-        if ovf_runs:
-            overflow_detail.append((scenario, sum(ovf_vals), max(ovf_vals)))
-    print("-" * 88)
+        print("%-34s %5d %8d %7.0f%% %10d %10d %8s %8s" %
+              (scenario, n, desync, 100.0 * desync / n, inner_blip, outer_bad,
+               ovf_csr_col, ovf_pcap_col))
+    print("-" * 97)
     print("%-34s %5d %8d %7.0f%%" %
           ("TOTAL", total_n, total_desync,
            100.0 * total_desync / total_n if total_n else 0))
-    print("(ovf_runs: runs with >0 overflow events / runs where overflow was "
-          "measured at all -- 'n/a' means no run in that scenario reported it)")
+    print("(ovf_csr/ovf_pcap: runs with >0 overflow / runs where that source was "
+          "measured at all; 'n/a' = never measured that way for this scenario)")
 
     if overflow_detail:
-        print("\nscenarios with overflow events -- sum and max events per scenario:")
-        for scenario, total, mx in overflow_detail:
-            print("  %-34s sum=%-10d max=%d" % (scenario, total, mx))
+        print("\nscenarios with overflow events -- sum and max, by source:")
+        for scenario, label, total, mx in overflow_detail:
+            print("  %-34s %-4s sum=%-10d max=%d" % (scenario, label, total, mx))
 
     batches = sorted({r["batch"] or "(none)" for r in rows})
     if len(batches) > 1:

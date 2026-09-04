@@ -53,6 +53,15 @@ def derive_fields(reframe):
         # a stale re-read/duplicate rather than data going missing).
         "inner_first_dup_of_preceding":
             (inner.get("events") or [{}])[0].get("dup_of_preceding"),
+        # In-band HF0_OVF / PERR flag tally, decoded straight from the wire
+        # bytes in the .pcap -- unlike client_overflow_events (the CSR-based
+        # count, capture-time only), this is a *derived* field: computable
+        # for ANY already-captured pcap, including ones from before overflow
+        # tracking existed at all. Use reprocess.py to backfill it into old
+        # manifest rows.
+        "inner_packets_total": inner.get("packets_total"),
+        "inner_overflow_packets": inner.get("overflow_packets"),
+        "inner_perr_packets": inner.get("perr_packets"),
     }
 
 

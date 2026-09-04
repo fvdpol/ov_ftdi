@@ -52,7 +52,17 @@ import blip_classify
 
 # --- constants, from LibOV.py --------------------------------------------------
 MAX_PACKET_SIZE = 1027
+HF0_ERR = 0x01
+HF0_OVF = 0x02          # RX Path Overflow -- inserted in-band by ovf_insert.py
+HF0_CLIP = 0x04
 HF0_TRUNC = 0x08
+HF0_FIRST = 0x10
+HF0_LAST = 0x20
+HF0_SPEED_MASK = 0xC0
+# LibOV's own "PERR" counter (__RXCSniffService.consume): any problem flag,
+# i.e. everything except FIRST/LAST/speed. Matching it exactly so a count
+# from a pcap is directly comparable to what LibOV would have logged live.
+HF0_PERR_MASK = HF0_ERR | HF0_OVF | HF0_CLIP | HF0_TRUNC
 
 # --- constants, from fastftdi.h ----------------------------------------------
 FTDI_PACKET_SIZE = 512
@@ -360,7 +370,18 @@ def inner_frame_size(b):
 
 def walk_inner(stream, context_frames=8):
     """Walk the concatenated 0xD0 payloads as a pure rxcsniff record stream.
-    Same pre-/post-context tracking as walk() -- see its docstring."""
+    Same pre-/post-context tracking as walk() -- see its docstring.
+
+    Also tallies HF0_OVF (RX-path overflow, per ovf_insert.py) and the
+    broader "PERR" mask (any problem flag) LibOV's own consume() checks,
+    from the flags byte 0xA0/0xA2 records carry (buf[1]) -- an in-band
+    marker present in the wire bytes themselves, independent of what the
+    live client did with them (a "clean reference" client with its handlers
+    disabled still has this in the usbmon capture; it just never looked).
+    This is the recommended way to get an overflow count for a pcap
+    captured before overflow tracking existed at all -- reprocess.py re-runs
+    this walk against the *already-stored* .pcap, no hardware needed.
+    """
     n = len(stream)
     start = 0
     for c in range(min(n, 8192)):
@@ -378,6 +399,7 @@ def walk_inner(stream, context_frames=8):
     run_start = None
     post_for = None
     post_count = 0
+    packets_total = overflow_packets = perr_packets = 0
     c = start
     clean_since = 0
     while c < n:
@@ -400,6 +422,13 @@ def walk_inner(stream, context_frames=8):
         counts[name] += 1
         clean_since += 1
         recent.append((c, name, sz))
+        if stream[c] in (0xA0, 0xA2):        # full packet records carry flags @ b[1]
+            packets_total += 1
+            flags = stream[c + 1]
+            if flags & HF0_OVF:
+                overflow_packets += 1
+            if flags & HF0_PERR_MASK:
+                perr_packets += 1
         if post_for is not None:
             unmatched_post_context[post_for].append((c, name, sz))
             post_count += 1
@@ -413,6 +442,9 @@ def walk_inner(stream, context_frames=8):
         "trailing": n - c, "total": n,
         "recovered": bool(unmatched) and clean_since > 50,
         "clean_frames_after_last_unmatched": clean_since,
+        "packets_total": packets_total,
+        "overflow_packets": overflow_packets,
+        "perr_packets": perr_packets,
     }
 
 
@@ -570,7 +602,12 @@ def main():
         um = r["unmatched"]
         if not um:
             print("%-14s CLEAN" % label)
-            return 0, {"verdict": "CLEAN", "unmatched": 0, "events": []}
+            return 0, {
+                "verdict": "CLEAN", "unmatched": 0, "events": [],
+                "packets_total": r.get("packets_total"),
+                "overflow_packets": r.get("overflow_packets"),
+                "perr_packets": r.get("perr_packets"),
+            }
 
         runs = group_runs(um)
         tag = "RECOVERED" if r["recovered"] else "NEVER RECOVERED"
@@ -602,6 +639,12 @@ def main():
             "wallclock": first["wallclock"],
             "clean_frames_after_last": r["clean_frames_after_last_unmatched"],
             "events": events,
+            # in-band overflow/PERR flag tally (inner layer only -- see
+            # walk_inner's docstring); None for the outer layer, which
+            # doesn't decode rxcsniff flags at all.
+            "packets_total": r.get("packets_total"),
+            "overflow_packets": r.get("overflow_packets"),
+            "perr_packets": r.get("perr_packets"),
         }
         return (0 if r["recovered"] else 1), summary
 
@@ -614,6 +657,8 @@ def main():
     print("=== inner whacker framing (0xD0 payloads -> rxcsniff records) ===")
     print("inner stream   %d bytes; frames %s"
           % (inner["total"], inner["counts"]))
+    print("in-band flags  %d packets, %d HF0_OVF, %d PERR (any problem flag)"
+          % (inner["packets_total"], inner["overflow_packets"], inner["perr_packets"]))
     inner_rc, inner_summary = verdict(
         "inner:", "inner", inner, res["subpayload"] or b"",
         to_outer_offset=lambda o: outer_offset_of_inner(

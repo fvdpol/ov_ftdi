@@ -75,6 +75,7 @@ def main():
 
     print("reprocessing %d run(s) with the current reframe.py ..." % len(targets))
     changed = missing = 0
+    updates_by_tag = {}    # tag -> derived-fields dict, for the merge-safe write below
     for r in targets:
         pcap = r["tag"] + ".pcap"
         if not os.path.exists(pcap):
@@ -95,9 +96,9 @@ def main():
             p = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
         reframe = load_reframe_json(reframe_json)
         new_fields = derive_fields(reframe)
+        updates_by_tag[r["tag"]] = new_fields
 
         before = {k: r.get(k) for k in new_fields}
-        r.update(new_fields)
         if before != new_fields:
             changed += 1
             print("  %s  scenario=%s  outer=%s->%s inner=%s->%s"
@@ -110,18 +111,29 @@ def main():
         print("\n(dry run -- nothing written)")
         return 0
 
-    # Rewrite the whole manifest: every row, targets updated in place, in
-    # their original order and position -- this is the one place the
-    # otherwise-append-only manifest gets rewritten, and only the derived
-    # fields of matched rows change.
+    # Re-read the manifest fresh, right before writing, and merge our updates
+    # onto THAT -- not onto the snapshot `rows` we started from -- so a
+    # concurrent capture (a batch still appending new rows the whole time
+    # this ran) can't have those new rows silently clobbered by this rewrite.
+    # Every row not in updates_by_tag passes through completely untouched.
+    # Still best avoided while a batch is actively running if you have the
+    # choice -- this makes it safe, not free of the extra I/O.
+    fresh_rows = load_manifest(args.manifest)
+    for r in fresh_rows:
+        upd = updates_by_tag.get(r["tag"])
+        if upd is not None:
+            r.update(upd)
     tmp = args.manifest + ".tmp"
     with open(tmp, "w") as f:
-        for r in rows:
+        for r in fresh_rows:
             f.write(json.dumps(r) + "\n")
     os.replace(tmp, args.manifest)
 
     print("\n%d run(s) reprocessed, %d changed verdict/fields, %d missing pcap"
           % (len(targets) - missing, changed, missing))
+    if len(fresh_rows) != len(rows):
+        print("(manifest grew from %d to %d rows while this ran -- those new "
+              "rows were preserved, untouched)" % (len(rows), len(fresh_rows)))
     return 0
 
 
