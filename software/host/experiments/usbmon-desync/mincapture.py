@@ -88,6 +88,20 @@ def setup(dev):
 
 
 def teardown(dev):
+    # OVF_INSERT_NUM_OVF/_TOTAL are cumulative since setup()'s reset pulse
+    # (OVF_INSERT_CTL.wr(1) then wr(0)) -- CSRStatus values latch on any
+    # write to OVF_INSERT_CTL (Perfcounter's "snapshot" pulse), so a plain
+    # wr(0) here (no reset, just re-latch) refreshes them to their final
+    # value for the whole capture window before we read. One register write
+    # + two reads, after time.sleep() has already returned -- doesn't
+    # reintroduce the CSR-during-capture confound this client exists to avoid.
+    # Same wording as ovctl.py's status-loop print, so run_bisect.sh parses
+    # both clients with one regex.
+    dev.regs.OVF_INSERT_CTL.wr(0)
+    ovf = dev.regs.OVF_INSERT_NUM_OVF.rd()
+    total = dev.regs.OVF_INSERT_NUM_TOTAL.rd()
+    print("%d overflow, %08x total" % (ovf, total), flush=True)
+
     dev.regs.SDRAM_SINK_GO.wr(0)
     dev.regs.SDRAM_HOST_READ_GO.wr(0)
     dev.regs.CSTREAM_CFG.wr(0)

@@ -81,6 +81,12 @@ def main():
     ap.add_argument("--client-rc", required=True, type=int)
     ap.add_argument("--client-unmatched", required=True, type=int)
     ap.add_argument("--client-assert", required=True, type=int)
+    ap.add_argument("--client-overflow-events", type=int, default=-1,
+                    help="OVF_INSERT_NUM_OVF for this session; -1 = not reported "
+                         "(older client, or client crashed before teardown)")
+    ap.add_argument("--client-overflow-total", type=int, default=-1,
+                    help="OVF_INSERT_NUM_TOTAL for this session (the denominator "
+                         "the overflow count is out of); -1 = not reported")
     ap.add_argument("--reframe-json", required=True)
     args = ap.parse_args()
 
@@ -103,6 +109,14 @@ def main():
         "client_unmatched": args.client_unmatched,
         "client_assert": args.client_assert,
         "client_desynced": args.client_unmatched > 0,
+        # RX-path overflow (OVF_INSERT_NUM_OVF/_TOTAL), relevant once the
+        # matrix includes no-`--filter-nak` scenarios (dense, overflow-prone
+        # by design). -1 from run_bisect.sh means "not reported" -> None,
+        # distinct from a genuine 0 events.
+        "client_overflow_events": (args.client_overflow_events
+                                   if args.client_overflow_events >= 0 else None),
+        "client_overflow_total": (args.client_overflow_total
+                                  if args.client_overflow_total >= 0 else None),
     }
     # --- derived facts: reframe.py's read of the stored pcap; reprocess.py
     # is the supported way to replace these later without re-running hardware.

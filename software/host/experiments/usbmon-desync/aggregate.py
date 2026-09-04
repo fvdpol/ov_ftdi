@@ -82,9 +82,10 @@ def main():
     for r in rows:
         by_scenario[r["scenario"]].append(r)
 
-    print("%-34s %5s %8s %8s %10s %10s" %
-          ("scenario", "N", "desync", "rate", "inner_blip", "outer_bad"))
+    print("%-34s %5s %8s %8s %10s %10s %8s" %
+          ("scenario", "N", "desync", "rate", "inner_blip", "outer_bad", "ovf_runs"))
     total_n = total_desync = 0
+    overflow_detail = []   # (scenario, sum_events, max_events) for the footer
     for scenario in sorted(by_scenario):
         rs = by_scenario[scenario]
         n = len(rs)
@@ -93,14 +94,29 @@ def main():
                           if r["inner_verdict"] in ("RECOVERED", "NEVER_RECOVERED"))
         outer_bad = sum(1 for r in rs
                          if r["outer_verdict"] in ("RECOVERED", "NEVER_RECOVERED"))
+        # client_overflow_events: -1/absent (older rows, or a client that never
+        # reported) is "not measured", not zero -- keep those out of the count.
+        ovf_vals = [r.get("client_overflow_events") for r in rs
+                    if r.get("client_overflow_events") is not None]
+        ovf_runs = sum(1 for v in ovf_vals if v > 0)
         total_n += n
         total_desync += desync
-        print("%-34s %5d %8d %7.0f%% %10d %10d" %
-              (scenario, n, desync, 100.0 * desync / n, inner_blip, outer_bad))
-    print("-" * 80)
+        ovf_col = "%d/%d" % (ovf_runs, len(ovf_vals)) if ovf_vals else "n/a"
+        print("%-34s %5d %8d %7.0f%% %10d %10d %8s" %
+              (scenario, n, desync, 100.0 * desync / n, inner_blip, outer_bad, ovf_col))
+        if ovf_runs:
+            overflow_detail.append((scenario, sum(ovf_vals), max(ovf_vals)))
+    print("-" * 88)
     print("%-34s %5d %8d %7.0f%%" %
           ("TOTAL", total_n, total_desync,
            100.0 * total_desync / total_n if total_n else 0))
+    print("(ovf_runs: runs with >0 overflow events / runs where overflow was "
+          "measured at all -- 'n/a' means no run in that scenario reported it)")
+
+    if overflow_detail:
+        print("\nscenarios with overflow events -- sum and max events per scenario:")
+        for scenario, total, mx in overflow_detail:
+            print("  %-34s sum=%-10d max=%d" % (scenario, total, mx))
 
     batches = sorted({r["batch"] or "(none)" for r in rows})
     if len(batches) > 1:

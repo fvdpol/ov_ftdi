@@ -98,7 +98,7 @@ fi
 # --- run the client ----------------------------------------------------
 # Keep only the lines that matter (desync, crash, bitstream id, PERR) so the
 # log stays small even when --format verbose dumps hundreds of MB of decode.
-KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR'
+KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR|[0-9]+ overflow, [0-9a-fA-F]+ total'
 OVCTL_FORMAT="${OVCTL_FORMAT:-custom}"    # custom = quiet; verbose = the original #25 repro
 FILTER_NAK="${FILTER_NAK:-1}"            # 1 = --filter-nak (default); 0 = off
 FILTER_SOF="${FILTER_SOF:-0}"           # 1 = --filter-sof: drops SOF only, keeps the
@@ -163,6 +163,21 @@ echo "'Unmatched byte' lines: $CLIENT_UM"
 echo "assert/protocol errors: $CLIENT_ASSERT"
 [ "$CLIENT_UM" != 0 ] && grep -m3 -E "$UM_RE" "${TAG}.client.log" | sed 's/^/  /' || true
 
+# OVF_INSERT_NUM_OVF/_TOTAL, cumulative since setup()'s reset: how many RX-path
+# overflow events (real data clipped, in-band-marked with RXCMD_MAGIC_OVF) this
+# session had. mincapture.py reads+prints it once at teardown; ovctl.py's ~1Hz
+# status loop reprints it cumulatively -- either way the LAST such line in the
+# client log is the final count for the whole run. Relevant now that we're
+# adding no-`--filter-nak` (dense, overflow-prone) scenarios to the matrix.
+OVF_LINE="$(grep -oE '[0-9]+ overflow, [0-9a-fA-F]+ total' "${TAG}.client.log" | tail -1 || true)"
+CLIENT_OVF_EVENTS=-1
+CLIENT_OVF_TOTAL=-1
+if [ -n "$OVF_LINE" ]; then
+  CLIENT_OVF_EVENTS="$(echo "$OVF_LINE" | grep -oE '^[0-9]+')"
+  CLIENT_OVF_TOTAL="$((16#$(echo "$OVF_LINE" | grep -oE '[0-9a-fA-F]+ total' | grep -oE '^[0-9a-fA-F]+')))"
+fi
+echo "overflow events       : $CLIENT_OVF_EVENTS  (of $CLIENT_OVF_TOTAL RX-path words this session; -1 = not reported)"
+
 echo
 echo "=== usbmon reframe (offline, kernel completion order) ==="
 python3 "$HERE/reframe.py" "${TAG}.pcap" --dump-blips "$OUT/blips" \
@@ -185,4 +200,7 @@ python3 "$HERE/record_run.py" \
     --reload "$RELOAD_TAG" --filter-nak "${FILTER_NAK:-1}" \
     --filter-sof "${FILTER_SOF:-0}" --mode "$MODE" --secs "$SECS" --tag "$TAG" \
     --client-rc "$CLIENT_RC" --client-unmatched "$CLIENT_UM" \
-    --client-assert "$CLIENT_ASSERT" --reframe-json "${TAG}.reframe.json"
+    --client-assert "$CLIENT_ASSERT" \
+    --client-overflow-events "$CLIENT_OVF_EVENTS" \
+    --client-overflow-total "$CLIENT_OVF_TOTAL" \
+    --reframe-json "${TAG}.reframe.json"
