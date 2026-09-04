@@ -52,17 +52,10 @@ import blip_classify
 
 # --- constants, from LibOV.py --------------------------------------------------
 MAX_PACKET_SIZE = 1027
-HF0_ERR = 0x01
-HF0_OVF = 0x02          # RX Path Overflow -- inserted in-band by ovf_insert.py
-HF0_CLIP = 0x04
-HF0_TRUNC = 0x08
-HF0_FIRST = 0x10
-HF0_LAST = 0x20
-HF0_SPEED_MASK = 0xC0
-# LibOV's own "PERR" counter (__RXCSniffService.consume): any problem flag,
-# i.e. everything except FIRST/LAST/speed. Matching it exactly so a count
-# from a pcap is directly comparable to what LibOV would have logged live.
-HF0_PERR_MASK = HF0_ERR | HF0_OVF | HF0_CLIP | HF0_TRUNC
+# Flag-byte constants (HF0_OVF, HF0_FIRST/_LAST, ...) live in blip_classify.py
+# now -- it owns packet-level decoding (decode_frame_packet), reframe.py just
+# needs HF0_TRUNC for frame sizing.
+HF0_TRUNC = blip_classify.HF0_TRUNC
 
 # --- constants, from fastftdi.h ----------------------------------------------
 FTDI_PACKET_SIZE = 512
@@ -422,6 +415,14 @@ def walk_inner(stream, context_frames=8):
     ovf_gap_max = None
     ovf_unresolved = 0         # no SOF seen again before EOF -- can't resolve, not evidence either way
     ovf_offsets = []           # for the quartile/temporal-distribution check below
+    # HF0_FIRST/HF0_LAST: the gateware stuffs one of each per CSTREAM_CFG
+    # enable/disable edge, i.e. once per capture SESSION regardless of
+    # reload (producer.py). LibOV's own consume() won't even look at a
+    # packet until it has seen HF0_FIRST -- so where this marker actually
+    # lands (should be ~byte 0) is directly relevant to any "is there stale
+    # data from a prior session" question (Tomasz, 2026-09-05).
+    first_offsets = []
+    last_offsets = []
     c = start
     clean_since = 0
     while c < n:
@@ -446,23 +447,27 @@ def walk_inner(stream, context_frames=8):
         recent.append((c, name, sz))
         if stream[c] in (0xA0, 0xA2):        # full packet records carry flags @ b[1]
             packets_total += 1
-            flags = stream[c + 1]
             pkt = blip_classify.decode_frame_packet(stream[c:c + sz])
-            sof_num = pkt.get("sof_frame_num") if pkt else None
-            if sof_num is not None:
-                for pend_sof in pending_ovf:
-                    gap = (sof_num - pend_sof) % 2048 if pend_sof is not None else None
-                    ovf_gap_counts[gap if gap in (0, 1) else (">1" if gap is not None else "?")] += 1
-                    if gap is not None:
-                        ovf_gap_max = gap if ovf_gap_max is None else max(ovf_gap_max, gap)
-                pending_ovf = []
-                last_sof_num = sof_num
-            if flags & HF0_OVF:
-                overflow_packets += 1
-                ovf_offsets.append(c)
-                pending_ovf.append(last_sof_num)
-            if flags & HF0_PERR_MASK:
-                perr_packets += 1
+            if pkt is not None:
+                sof_num = pkt.get("sof_frame_num")
+                if sof_num is not None:
+                    for pend_sof in pending_ovf:
+                        gap = (sof_num - pend_sof) % 2048 if pend_sof is not None else None
+                        ovf_gap_counts[gap if gap in (0, 1) else (">1" if gap is not None else "?")] += 1
+                        if gap is not None:
+                            ovf_gap_max = gap if ovf_gap_max is None else max(ovf_gap_max, gap)
+                    pending_ovf = []
+                    last_sof_num = sof_num
+                if pkt["is_ovf"]:
+                    overflow_packets += 1
+                    ovf_offsets.append(c)
+                    pending_ovf.append(last_sof_num)
+                if pkt["is_perr"]:
+                    perr_packets += 1
+                if pkt["is_first"]:
+                    first_offsets.append(c)
+                if pkt["is_last"]:
+                    last_offsets.append(c)
         if post_for is not None:
             unmatched_post_context[post_for].append((c, name, sz))
             post_count += 1
@@ -507,6 +512,18 @@ def walk_inner(stream, context_frames=8):
         "overflow_quartile_counts": quartile_counts,
         "overflow_packets": overflow_packets,
         "perr_packets": perr_packets,
+        # Session start/end markers (2026-09-05, Tomasz: "where is the
+        # capture start marker?"). Healthy expectation: exactly one FIRST at
+        # (or very near) offset 0 of the parsed range, one LAST at (or very
+        # near) the end -- more/fewer/misplaced is itself a finding. offset
+        # is relative to `start` (the parser's own lock point), matching how
+        # first_offset_pct is computed elsewhere.
+        "first_marker_count": len(first_offsets),
+        "first_marker_offset": first_offsets[0] if first_offsets else None,
+        "first_marker_offset_pct": (round(100.0 * (first_offsets[0] - start) / span, 2)
+                                    if first_offsets else None),
+        "last_marker_count": len(last_offsets),
+        "last_marker_offset": last_offsets[-1] if last_offsets else None,
     }
 
 
@@ -758,6 +775,11 @@ def main():
           % (inner["total"], inner["counts"]))
     print("in-band flags  %d packets, %d HF0_OVF, %d PERR (any problem flag)"
           % (inner["packets_total"], inner["overflow_packets"], inner["perr_packets"]))
+    print("session markers %d HF0_FIRST (first @ offset %s, %s%% into stream), "
+          "%d HF0_LAST (last @ offset %s)  -- healthy = exactly 1 each, FIRST near 0%%"
+          % (inner["first_marker_count"], inner["first_marker_offset"],
+             inner["first_marker_offset_pct"], inner["last_marker_count"],
+             inner["last_marker_offset"]))
     inner_rc, inner_summary = verdict(
         "inner:", "inner", inner, res["subpayload"] or b"",
         to_outer_offset=lambda o: outer_offset_of_inner(

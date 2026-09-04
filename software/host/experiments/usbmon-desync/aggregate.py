@@ -161,6 +161,25 @@ def main():
                      r.get("inner_overflow_sof_gap_unresolved"),
                      r.get("inner_overflow_sof_gap_max"), q, r["tag"]))
 
+    # Session start/end markers (2026-09-05, Tomasz: "where is the capture
+    # start marker?" -- checking for stale data from a prior session, since
+    # LibOV won't process anything before its own session's HF0_FIRST).
+    # Healthy: exactly 1 FIRST near 0%, exactly 1 LAST near the end.
+    marker_rows = [r for r in rows if r.get("inner_first_marker_count") is not None]
+    marker_issues = [r for r in marker_rows if
+                      r["inner_first_marker_count"] != 1
+                      or (r.get("inner_first_marker_offset_pct") or 0) > 1.0
+                      or r.get("inner_last_marker_count") != 1]
+    if marker_rows:
+        print("\nsession markers (HF0_FIRST/HF0_LAST): %d/%d run(s) look off "
+              "(not exactly 1 FIRST near 0%%, or not exactly 1 LAST):"
+              % (len(marker_issues), len(marker_rows)))
+        for r in marker_issues:
+            print("  FIRST count=%s @%s%%  LAST count=%s  scenario=%s  tag=%s"
+                  % (r.get("inner_first_marker_count"),
+                     r.get("inner_first_marker_offset_pct"),
+                     r.get("inner_last_marker_count"), r["scenario"], r["tag"]))
+
     # 2026-09-04 postmortem: 56/64 runs in one batch quietly captured USB
     # background chatter instead of real DUT traffic after the DUT dropped
     # off mid-batch -- every other check in this report (desync rate,

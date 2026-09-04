@@ -25,6 +25,26 @@ USB_PID_NAMES = {
 # OutputITI1480A, both of which divide by 60e6 to print seconds.
 DEVICE_CLOCK_HZ = 60e6
 
+# Packet flags byte (record[1] on 0xA0/0xA2 records), from LibOV.py/
+# constants.py. HF0_FIRST/HF0_LAST are a "stuffed" marker packet the
+# gateware inserts on every CSTREAM_CFG stream-enable rising/falling edge
+# (producer.py: `If(ena & ~en_last, packet_first.set(1))` and the mirror for
+# ~ena & en_last) -- one pair per capture SESSION, regenerated every time,
+# independent of whether the bitstream was reloaded. LibOV's own
+# __RXCSniffService gates ALL packet handling on having seen HF0_FIRST
+# (`got_start`), so if this marker is ever missing/late/duplicated that's
+# directly relevant to a desync investigation -- see reframe.py's tracking.
+HF0_ERR = 0x01
+HF0_OVF = 0x02
+HF0_CLIP = 0x04
+HF0_TRUNC = 0x08
+HF0_FIRST = 0x10
+HF0_LAST = 0x20
+HF0_SPEED_MASK = 0xC0
+# LibOV's own "PERR" counter (__RXCSniffService.consume): any problem flag,
+# i.e. everything except FIRST/LAST/speed.
+HF0_PERR_MASK = HF0_ERR | HF0_OVF | HF0_CLIP | HF0_TRUNC
+
 
 def pid_valid(byte):
     """True if `byte` could be a genuine USB PID (low nibble == bitwise
@@ -52,10 +72,14 @@ def decode_frame_packet(frame_bytes):
         delta_ts |= frame_bytes[4 + i] << (8 * i)
     pid_byte = frame_bytes[pkt_start]
     valid = pid_valid(pid_byte)
+    flags = frame_bytes[1]
     out = {
         "pid_byte": pid_byte, "pid_name": USB_PID_NAMES.get(pid_byte),
         "pid_valid": valid,
         "delta_ts": delta_ts, "delta_ts_us": delta_ts / (DEVICE_CLOCK_HZ / 1e6),
+        "flags": flags,
+        "is_first": bool(flags & HF0_FIRST), "is_last": bool(flags & HF0_LAST),
+        "is_ovf": bool(flags & HF0_OVF), "is_perr": bool(flags & HF0_PERR_MASK),
     }
     # SOF: PID(1) + 11-bit frame number (byte0 + low 3 bits of byte1) +
     # CRC5 (top 5 bits of byte1). A real, protocol-level sequence number --

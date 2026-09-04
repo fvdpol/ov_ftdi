@@ -89,6 +89,16 @@ def derive_fields(reframe):
         "inner_overflow_sof_gap_unresolved": inner.get("overflow_sof_gap_unresolved"),
         "inner_overflow_sof_gap_max": inner.get("overflow_sof_gap_max"),
         "inner_overflow_quartile_counts": inner.get("overflow_quartile_counts"),
+        # Session start/end markers (2026-09-05, Tomasz: "where is the
+        # capture start marker?" -- is there stale data from a prior
+        # session?). Healthy: exactly 1 FIRST near offset 0%, exactly 1
+        # LAST near the end. 0 FIRST, a late FIRST, or >1 of either is
+        # itself worth a look.
+        "inner_first_marker_count": inner.get("first_marker_count"),
+        "inner_first_marker_offset": inner.get("first_marker_offset"),
+        "inner_first_marker_offset_pct": inner.get("first_marker_offset_pct"),
+        "inner_last_marker_count": inner.get("last_marker_count"),
+        "inner_last_marker_offset": inner.get("last_marker_offset"),
     }
 
 
