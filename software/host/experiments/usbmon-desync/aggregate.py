@@ -19,7 +19,11 @@ import json
 import sys
 
 
-def load(manifest):
+def load(manifest, count_mode=False):
+    """count_mode: a missing manifest means "0 runs so far" (a resuming
+    orchestrator's very first call, before anything has ever completed) --
+    not an error. Otherwise it's a friendly exit, for a human running this
+    directly."""
     rows = []
     try:
         with open(manifest) as f:
@@ -28,6 +32,8 @@ def load(manifest):
                 if line:
                     rows.append(json.loads(line))
     except FileNotFoundError:
+        if count_mode:
+            return rows
         sys.exit("no manifest at %s yet -- run run_bisect.sh at least once" % manifest)
     return rows
 
@@ -41,9 +47,14 @@ def main():
     ap.add_argument("--since", help="only runs with ts >= this (lexical, e.g. 20260905T000000Z)")
     ap.add_argument("--list-batches", action="store_true",
                     help="list distinct batch labels seen and exit")
+    ap.add_argument("--count", action="store_true",
+                    help="print just the number of matching rows (bare integer, "
+                         "nothing else) and exit -- e.g. for an orchestrator to "
+                         "resume a scenario after N-already-done, rather than "
+                         "restarting an interrupted experiment from scratch")
     args = ap.parse_args()
 
-    rows = load(args.manifest)
+    rows = load(args.manifest, count_mode=args.count)
 
     if args.list_batches:
         batches = sorted({r["batch"] or "(none)" for r in rows})
@@ -58,6 +69,10 @@ def main():
         rows = [r for r in rows if r["batch"] == args.batch]
     if args.since:
         rows = [r for r in rows if r["ts"] >= args.since]
+
+    if args.count:
+        print(len(rows))
+        return 0
 
     if not rows:
         print("no runs match the given filters")
