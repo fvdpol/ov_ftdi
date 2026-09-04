@@ -19,10 +19,10 @@ FTDI_DATA_PER_PACKET = FTDI_PACKET_SIZE - 2
 
 
 def sdram_frame(words):
-    # 0xD0, n  where size = (n+1)*2 + 2; body zeros, like the real whacker
-    # silent-audio stream (which is why a desync there never re-locks).
+    # 0xD0, n  where size = (n+1)*2 + 2; body is (n+1) valid 2-byte rxcsniff
+    # records (0xAC 0x00) so the inner whacker walk has something to lock on.
     n = words - 1
-    return bytes([0xD0, n]) + bytes((n + 1) * 2)
+    return bytes([0xD0, n]) + (b"\xac\x00" * (n + 1))
 
 
 def io_frame():
@@ -84,12 +84,23 @@ def main():
     print("clean case  : CLEAN  (%d frames: %s)"
           % (sum(kinds.values()), dict(kinds)))
 
-    cut = int(len(captured) * 0.6)
-    corrupt = os.path.join(d, "corrupt.pcap")
-    write_pcap(corrupt, add_ftdi_headers(captured[:cut] + captured[cut + 1:]))
-    rc, out = reframe(corrupt)
-    assert rc == 1 and "VERDICT: DESYNC" in out, out
-    print("corrupt case: DESYNC (1-byte deletion detected)")
+    # 1-byte deletion mid-stream: the framer slips once, then re-locks on the
+    # frequent 0xD0 / rxcsniff headers -> DESYNC (RECOVERED), rc 0.
+    cut = int(len(captured) * 0.5)
+    mid = os.path.join(d, "mid.pcap")
+    write_pcap(mid, add_ftdi_headers(captured[:cut] + captured[cut + 1:]))
+    rc, out = reframe(mid)
+    assert "DESYNC (RECOVERED)" in out and rc == 0, out
+    print("mid-corrupt : DESYNC then re-locked (recovery detected)")
+
+    # 1-byte deletion in the last few %: no room to re-lock -> NEVER RECOVERED,
+    # rc 1.
+    cut = len(captured) - 40
+    late = os.path.join(d, "late.pcap")
+    write_pcap(late, add_ftdi_headers(captured[:cut] + captured[cut + 1:]))
+    rc, out = reframe(late)
+    assert "NEVER RECOVERED" in out and rc == 1, out
+    print("late-corrupt: DESYNC, no re-lock (terminal desync detected)")
 
     print("\nOK")
 

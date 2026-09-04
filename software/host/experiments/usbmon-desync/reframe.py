@@ -206,22 +206,34 @@ def find_first_lock(stream):
     return 0
 
 
-def walk(stream, skip_startup=True):
+def walk(stream, skip_startup=True, collect_magic=None):
+    """Walk `stream` with the LibOV outer service framing.
+
+    collect_magic: if set (e.g. 0xD0), also return the concatenated payloads of
+    every frame with that magic, minus its 2-byte header -- i.e. the inner
+    whacker byte stream that LibOV's SDRAMReadService feeds to rxcsniff.
+    """
     n = len(stream)
     start = find_first_lock(stream) if skip_startup else 0
 
     counts = collections.Counter()
     unmatched = []
+    subpayload = bytearray() if collect_magic is not None else None
     c = start
+    clean_frames_since_unmatched = 0
     while c < n:
         name, sz = frame_size(stream[c:c + MAX_PACKET_SIZE + 8])
         if sz is None:
             unmatched.append((c, stream[c]))
+            clean_frames_since_unmatched = 0
             c += 1
             continue
         if sz == _INCOMPLETE:
             break                       # trailing partial frame -- normal
         counts[name] += 1
+        clean_frames_since_unmatched += 1
+        if subpayload is not None and stream[c] == collect_magic:
+            subpayload += stream[c + 2:c + sz]
         c += sz
 
     return {
@@ -230,6 +242,53 @@ def walk(stream, skip_startup=True):
         "lead_skipped": start,
         "trailing": n - c,
         "total": n,
+        # "recovered": framing was clean for a good stretch after the last slip
+        "recovered": bool(unmatched) and clean_frames_since_unmatched > 50,
+        "clean_frames_after_last_unmatched": clean_frames_since_unmatched,
+        "subpayload": bytes(subpayload) if subpayload is not None else None,
+    }
+
+
+def inner_frame_size(b):
+    """Sizing for the inner whacker stream: rxcsniff records only (0xA0-0xAD).
+    LibOV's SDRAMReadService feeds this to [rxcsniff.service] alone."""
+    m = b[0]
+    if m not in (0xA0, 0xA1, 0xA2, 0xAC, 0xAD):
+        return "?", None
+    return frame_size(b)
+
+
+def walk_inner(stream):
+    """Walk the concatenated 0xD0 payloads as a pure rxcsniff record stream."""
+    n = len(stream)
+    start = 0
+    for c in range(min(n, 8192)):
+        if stream[c] in (0xA0, 0xA1, 0xA2, 0xAC, 0xAD):
+            _n, sz = inner_frame_size(stream[c:c + MAX_PACKET_SIZE + 8])
+            if sz not in (None, _INCOMPLETE):
+                start = c
+                break
+    counts = collections.Counter()
+    unmatched = []
+    c = start
+    clean_since = 0
+    while c < n:
+        name, sz = inner_frame_size(stream[c:c + MAX_PACKET_SIZE + 8])
+        if sz is None:
+            unmatched.append((c, stream[c]))
+            clean_since = 0
+            c += 1
+            continue
+        if sz == _INCOMPLETE:
+            break
+        counts[name] += 1
+        clean_since += 1
+        c += sz
+    return {
+        "counts": dict(counts), "unmatched": unmatched, "lead_skipped": start,
+        "trailing": n - c, "total": n,
+        "recovered": bool(unmatched) and clean_since > 50,
+        "clean_frames_after_last_unmatched": clean_since,
     }
 
 
@@ -276,7 +335,7 @@ def main():
         with open(args.dump_stream, "wb") as f:
             f.write(stream)
 
-    res = walk(stream, skip_startup=not args.no_skip_startup)
+    res = walk(stream, skip_startup=not args.no_skip_startup, collect_magic=0xD0)
 
     print("device            bus %d dev %d" % (bus, dev))
     print("reframed stream   %d bytes  (%d URB completions)"
@@ -287,19 +346,42 @@ def main():
           % (res["counts"], sum(res["counts"].values())))
     print("trailing bytes    %d  (partial frame at EOF)" % res["trailing"])
 
-    um = res["unmatched"]
-    if not um:
-        print()
-        print("VERDICT: CLEAN -- the bytes the kernel delivered reframe without "
-              "a single desync.")
-        return 0
+    def verdict(label, r, buf):
+        um = r["unmatched"]
+        if not um:
+            print("%-14s CLEAN" % label)
+            return 0
+        off0 = um[0][0]
+        offL = um[-1][0]
+        tag = "RECOVERED" if r["recovered"] else "NEVER RECOVERED"
+        print("%-14s DESYNC (%s) -- %d unmatched; first@%d last@%d; "
+              "%d clean frames after last"
+              % (label, tag, len(um), off0, offL,
+                 r["clean_frames_after_last_unmatched"]))
+        print("               ctx first: %s"
+              % buf[max(0, off0 - 12):off0 + 12].hex(" "))
+        return 0 if r["recovered"] else 1
 
-    off0, byte0 = um[0]
-    ctx = stream[max(0, off0 - 16):off0 + 16]
     print()
-    print("VERDICT: DESYNC -- %d unmatched byte(s); first at offset %d (0x%02x)"
-          % (len(um), off0, byte0))
-    print("  context [-16..+16]: %s" % ctx.hex(" "))
+    print("=== outer 0xD0 / service framing (the wire layer) ===")
+    outer_rc = verdict("outer:", res, stream)
+
+    inner = walk_inner(res["subpayload"] or b"")
+    print()
+    print("=== inner whacker framing (0xD0 payloads -> rxcsniff records) ===")
+    print("inner stream   %d bytes; frames %s"
+          % (inner["total"], inner["counts"]))
+    inner_rc = verdict("inner:", inner, res["subpayload"] or b"")
+
+    print()
+    if not outer_rc and not inner_rc:
+        print("VERDICT: CLEAN (or self-recovered) at both layers -- the kernel-"
+              "delivered bytes frame fine; a LibOV desync on this capture is in "
+              "LibOV's own consumption, not the wire.")
+        return 0
+    print("VERDICT: DESYNC on the wire bytes themselves "
+          "(%s%s) -- not a LibOV-only artifact."
+          % ("outer " if outer_rc else "", "inner" if inner_rc else ""))
     return 1
 
 

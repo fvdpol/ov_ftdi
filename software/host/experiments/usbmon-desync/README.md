@@ -35,9 +35,19 @@ userspace touches them. So:
 | client clean, reframe clean | baseline check (run `mincapture` first) |
 
 `reframe.py` mirrors `LibOV.py` (service magics / sizes) and `fastftdi.c`
-(2-byte FT2232H status header stripped per 512-byte USB packet). It is a
-size-walk of the outer framing only — it does not verify inner checksums, which
-is enough to detect a desync.
+(2-byte FT2232H status header stripped per 512-byte USB packet). It walks **two**
+layers, matching LibOV's structure:
+
+- **outer** — the `0x55/0xAA/0xA0../0xD0/0xE0` service stream (LibOV `__comms`)
+- **inner** — the concatenated `0xD0` payloads walked as pure rxcsniff records
+  (LibOV `SDRAMReadService` feeds these to `rxcsniff` alone). LibOV's
+  `Unmatched byte` prints are mostly from this inner framer.
+
+For each layer it reports CLEAN, `DESYNC (RECOVERED)` — slipped once then
+re-locked on a later header — or `DESYNC (NEVER RECOVERED)`. A dense stream is
+expected to self-heal; a sparse `--filter-nak` stream (mostly `0x00`, no resync
+marker) is not. If both layers are CLEAN / RECOVERED while the live client
+desynced, the fault is in LibOV's consumption, not on the wire.
 
 ## Prerequisites
 
