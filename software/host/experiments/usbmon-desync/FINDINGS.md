@@ -184,12 +184,13 @@ test is 1 real, counted LOAD+DRAIN_WAIT priming run followed by N NOLOAD+DRAIN_W
 back-to-back (each depends on the previous run's drain, matching how the existing no-load
 cells already run without a reload between iterations).
 
-**Result (batch `20260905-drain-wait`, master gateware, N=8): 8/8 no-load+drain runs
-clean** -- 0 desync, 0 wire-level corruption (`inner_blip`/`outer_bad`), vs. the
-established no-drain baseline of 4/8 (50%) for the same gateware/condition. If the true
-rate were still 50%, 8/8 clean by chance is ~0.4% likely -- this looks like a real effect,
-not a fluke, though N=8 against one gateware is still a modest sample and worth expanding
-(other gateware, larger N) before calling it fully settled.
+**Result (batch `20260905-drain-wait`): 24/24 no-load+drain runs clean across all 3
+gateware** (8 bundled, 8 master, 8 tmon-filternak, plus one priming reload+drain run each,
+also clean) -- 0 desync, 0 wire-level corruption (`inner_blip`/`outer_bad`), vs. the
+established no-drain baseline of 4/8 (50%) for master/no-load. If the true rate were still
+50%, 24/24 clean by chance is astronomically unlikely (~6e-8) -- this is a strong, now
+gateware-independent effect. Still only N=8/gateware; expanding N further (an overnight
+accumulation run) is in progress -- see next-steps.
 
 **How this fits with (A)/(B) above:** `ovctl.py`'s `finally` block already sets
 `CSTREAM_CFG=0` promptly on a normal exit, so the register itself isn't stuck enabled --
