@@ -1,0 +1,22 @@
+decode_out_ramp.py -- ramp value each side of the framing-break seam, for the
+--filter-nak no-load runs with a 24-bit S24 ramp played continuously into the
+DUT (batch 20260905-ramp). 96 kHz -> 96 ramp frames per ms; ~10 frames per OUT
+packet, so live capture advances the ramp by ~0 across a few-hundred-byte break.
+
+  run          seam @ inner off   ramp before -> after        step across seam
+  ----------   ----------------   -------------------------   -----------------
+  161234Z            7,195,244    7,981,234 -> 12,661,784     +4,680,550 frames = +48.8 s
+  162331Z           16,245,862    3,987,940 ->  8,593,220     +4,605,280 frames = +48.0 s
+                                                              (+ a +26,620-frame / +0.28 s
+                                                               step ~1 KB later -- drain tail)
+  161840Z                  263    (no pre-seam region)        ramp continuous through the
+                                                              whole capture -- ring was
+                                                              near-empty at session start
+
+The two runs with a real pre-seam region both show the ramp ~48 s BEHIND across
+the seam: the bytes before the seam were generated ~48 s earlier on the
+absolute (free-running) ramp timeline than the bytes after it. That is a
+previous session's data, read straight off the wire. The ~48 s is consistent
+between the two, suggesting a characteristic amount of timeline the 16 MiB ring
+holds (the previous session's SDRAM sink kept writing and wrapping it after its
+client detached).

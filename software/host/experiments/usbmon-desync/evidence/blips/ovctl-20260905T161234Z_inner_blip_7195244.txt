@@ -1,0 +1,31 @@
+pcap: /home/frank/ov_ftdi/software/host/experiments/usbmon-desync/results/ovctl-20260905T161234Z.pcap
+layer: inner  offset (exact byte, this layer's stream): 7195244  outer-stream offset: 7420253  run length: 492 bytes  verdict: RECOVERED  wallclock: 2026-09-05T16:12:37.719947
+skipped-run duplicates the 492 bytes immediately preceding it: False / immediately following it (post re-lock): False  (loss-vs-insertion hint -- True leans 'stale re-read / duplicate', False is uninformative either way, not evidence of loss)
+last PID before gap: None -- first PID after gap: None (structurally valid PID byte: None; False means this isn't a genuine packet boundary -- either a false-positive relock, or the payload is corrupted past just the framing)
+SOF frame-number gap across the gap: n/a (no SOF packet within the saved window on one or both sides)  (a real USB sequence number, increments by 1 every 125us; 1 = nothing macroscopic missing here, >1 lower-bounds how many microframes of real traffic did)
+device-clock time from the last pre-gap packet to the first post-gap one: ? us (typical inter-packet gap nearby: ~? us) -- from each packet's own delta-timestamp, independent of how many bytes were skipped to get here
+
+preceding 8 parsed frames (offset, name, size):
+   7194157  rxcsniff   9
+   7194166  rxcsniff   6
+   7194172  rxcsniff   8
+   7194180  rxcsniff   520
+   7194700  rxcsniff   7
+   7194707  rxcsniff   9
+   7194716  rxcsniff   8
+   7194724  rxcsniff   520
+
+>>> framer trips here: offset 7195244 <<<
+
+following 8 parsed frames after re-lock (offset, name, size):
+   7195736  rxcsniff   7
+   7195743  rxcsniff   9
+   7195752  rxcsniff   520
+   7196272  rxcsniff   7
+   7196279  rxcsniff   9
+   7196288  rxcsniff   520
+   7196808  rxcsniff   7
+   7196815  rxcsniff   8
+
+hex, 256 bytes before .. 256 bytes after offset 7195244 (trip point marked |><|):
+00 00 00 00 00 00 00 00 00 05 01 01 06 05 02 06 03 05 03 03 02 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 04 00 02 07 00 05 02 00 07 04 01 00 05 00 00 00 00 00 00 00 00 03 03 03 03 03 03 03 03 03 03 03 02 06 07 02 02 00 00 00 03 00 03 02 00 00 00 00 00 00 00 00 00 02 02 02 02 02 02 02 02 02 02 02 03 06 00 05 05 04 02 03 04 07 03 02 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02 04 02 02 05 03 01 01 03 00 00 00 00 00 00 00 00 00 05 05 05 05 05 05 05 05 05 05 05 05 04 07 05 04 02 05 00 06 06 03 00 02 00 00 00 00 00 00 00 00 05 05 05 05 05 05 05 05 05 05 05 04 00 05 05 01 01 04 06 00 07 02 00 02 00 00 00 00 00 00 a0 00 03 00 cb e1 83 b2 a0 00 03 02 18 4b 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 00 03 03  |><|  03 00 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 00 03 03 03 00 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 00 03 03 03 03 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 00 03 03 03 03 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 03 00 00 00 00 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 03 00 00 00 00 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 03 00 00 00 03 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 03 00 00 00 03 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 03 00 00 03 00 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 03 00 00 03 00 03 03 00 00 00 00 00 00 03 03 00 00 03 00 03 03 03 00 03 03 00 00 03 03 03 03 00 00 00 00 00 00 03 03 00 00 03 00

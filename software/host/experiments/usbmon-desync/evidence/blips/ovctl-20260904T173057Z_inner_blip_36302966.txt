@@ -1,0 +1,31 @@
+pcap: /home/frank/ov_ftdi/software/host/experiments/usbmon-desync/results/ovctl-20260904T173057Z.pcap
+layer: inner  offset (exact byte, this layer's stream): 36302966  outer-stream offset: 37437574  run length: 274 bytes  verdict: RECOVERED  wallclock: 2026-09-04T17:31:02.363697
+skipped-run duplicates the 274 bytes immediately preceding it: False / immediately following it (post re-lock): False  (loss-vs-insertion hint -- True leans 'stale re-read / duplicate', False is uninformative either way, not evidence of loss)
+last PID before gap: None -- first PID after gap: None (structurally valid PID byte: None; False means this isn't a genuine packet boundary -- either a false-positive relock, or the payload is corrupted past just the framing)
+SOF frame-number gap across the gap: n/a (no SOF packet within the saved window on one or both sides)  (a real USB sequence number, increments by 1 every 125us; 1 = nothing macroscopic missing here, >1 lower-bounds how many microframes of real traffic did)
+device-clock time from the last pre-gap packet to the first post-gap one: ? us (typical inter-packet gap nearby: ~? us) -- from each packet's own delta-timestamp, independent of how many bytes were skipped to get here
+
+preceding 8 parsed frames (offset, name, size):
+  36301878  rxcsniff   9
+  36301887  rxcsniff   520
+  36302407  rxcsniff   7
+  36302414  rxcsniff   9
+  36302423  rxcsniff   9
+  36302432  rxcsniff   6
+  36302438  rxcsniff   8
+  36302446  rxcsniff   520
+
+>>> framer trips here: offset 36302966 <<<
+
+following 8 parsed frames after re-lock (offset, name, size):
+  36303240  rxcsniff   7
+  36303247  rxcsniff   7
+  36303254  rxcsniff   9
+  36303263  rxcsniff   520
+  36303783  rxcsniff   7
+  36303790  rxcsniff   9
+  36303799  rxcsniff   9
+  36303808  rxcsniff   6
+
+hex, 256 bytes before .. 256 bytes after offset 36302966 (trip point marked |><|):
+18 d2 a0 00 03 00 d2 e1 83 b2 a0 00 03 02 18 c3 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |><|  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 fd ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00

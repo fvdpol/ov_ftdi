@@ -3,7 +3,9 @@
 *Living draft, revised as data comes in. Last data refresh: run
 `./gen_report_tables.py --update issue25-report.md` after new captures or a
 reprocess. This is the externally-shareable summary; day-to-day working notes,
-dead ends and internal hypotheses live in `FINDINGS.md`.*
+dead ends and internal hypotheses live in `FINDINGS.md`. The raw data behind the
+numbers — the run manifest and a sample of per-event dumps — is in `evidence/`
+(no pcaps; those are ~1 GB each and stay on the rig).*
 
 ## TL;DR
 
