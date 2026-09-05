@@ -54,8 +54,16 @@ flagged) is checkable via the USB SOF frame number (an actual protocol sequence 
 increments every 125us, not filtered) either side of each `HF0_OVF` event -- a gap >1 means
 a whole microframe of traffic is confirmed missing; 0 or 1 means no such evidence (not
 proof nothing was lost -- SOF-gap granularity is whole-microframe, so a sub-microframe loss
-wouldn't show). Built (`reframe.py`/`blip_classify.py`, per-event `overflow_sof_gap_gt1`)
-but **not yet run at scale against real data** -- next step.
+wouldn't show). Built (`reframe.py`/`blip_classify.py`, per-event `overflow_sof_gap_gt1`) and now run at
+scale (2026-09-04 backfill, all 75 manifest rows): 3,262 `HF0_OVF` events show a confirmed
+SOF-number gap >1 (real, whole-microframe loss) vs. 720,632 with gap <=1 (no confirmed loss
+at this granularity) and 13,561 unresolved (no SOF close enough to judge). So the large
+majority of in-band overflow flags do **not** correspond to a confirmed loss of traffic --
+consistent with `HF0_OVF` firing on transient producer backpressure that the SOF-gap check
+is too coarse to see (sub-microframe loss wouldn't show as a gap), not proof that no loss
+occurred. Doesn't by itself explain the no-load desync (overflow fires just as often on
+clean reload runs, see above) but rules out "most overflow events silently drop a full
+microframe" as the shape of the problem.
 
 Also relevant: `ovctl`'s CSR-based overflow count (`OVF_INSERT_NUM_OVF`, read via a
 register write + two reads) is itself subject to the same class of host-side register-I/O
@@ -63,9 +71,12 @@ confound #25 is about. The in-band `HF0_OVF` flag (decoded straight from wire by
 register I/O) is the more trustworthy of the two, same reasoning as why `mincapture.py`
 (zero register I/O during the capture window) is the reference client.
 
-**Open anomaly:** on the no-load cells, `client_overflow_events` (CSR) reads 0 for every
-run where it was measured, while the in-band flag shows nonzero for 7-8/8 of the same
-cells' runs. Both should read the same underlying hardware counter. Not yet root-caused.
+**Open anomaly, confirmed at scale (was 7-8/8 per gateware cell, now all 24 no-load `ovctl`
+runs across all 3 gateware):** `client_overflow_events` (CSR) reads nonzero on **0/24**
+no-load runs, while the in-band flag (`inner_overflow_packets`) reads nonzero on **22/24** of
+the same runs. Both should reflect the same underlying hardware counter -- this is now a
+statistically solid discrepancy, not a small-sample fluke, but the mechanism is still not
+root-caused.
 
 ## Session markers (HF0_FIRST/HF0_LAST) -- the strongest lead so far
 
@@ -78,22 +89,27 @@ capture *session*, regenerated every time, independent of reload. LibOV's own
 data from a prior session" (Tomasz's question, 2026-09-05: "In the corrupted stream, where
 is the capture start marker?").
 
-**Finding, 4 hand-checked samples (not yet run at scale):**
+**Finding, now confirmed at full scale via `reprocess.py` (2026-09-04 backfill, 75/75 rows
+reprocessed, 0 missing pcap) -- was 4 hand-checked samples, now every no-load/reload row in
+the manifest:**
 
-| run | condition | outcome | HF0_FIRST |
-|---|---|---|---|
-| `ovctl-20260904T112926Z` | reload | clean | present, packet #1 |
-| `ovctl-20260904T163640Z` | no-load | clean | present, packet #1 |
-| `ovctl-20260904T164128Z` | no-load | desync (bundled) | **absent entirely** |
-| `ovctl-20260904T172104Z` | no-load | desync (master) | **absent entirely** |
+| condition | outcome | rows with >=1 HF0_FIRST |
+|---|---|---|
+| reload (any gateware) | -- | **42/42** |
+| no-load | CLEAN | **21/21** |
+| no-load | desync | **0/12** |
 
-The marker's presence tracks the **desync outcome**, not reload-vs-noload as a blanket
-category -- a clean no-load run shows it exactly like a reload run does. This is a clean,
-mechanistically coherent result: whatever fails at session start in the bad no-load cases
-also swallows this marker, well before the framing itself visibly breaks deep into the
-capture (14-16M bytes in, in the samples checked) -- reconciling Tomasz's objection to a
-pure "start-of-stream" story (the visible break really is mid-stream) with a start-of-
-session root cause (the earliest symptom is invisible unless you specifically look for it).
+Perfect separation, not a trend: every clean run (reload or no-load) has the marker, every
+desynced no-load run is missing it entirely. The marker's presence tracks the **desync
+outcome**, not reload-vs-noload as a blanket category. This is a clean, mechanistically
+coherent result: whatever fails at session start in the bad no-load cases also swallows this
+marker, well before the framing itself visibly breaks deep into the capture (14-16M bytes in,
+in the samples checked) -- reconciling Tomasz's objection to a pure "start-of-stream" story
+(the visible break really is mid-stream) with a start-of-session root cause (the earliest
+symptom is invisible unless you specifically look for it). Still worth restating the caveat
+from "How to read this document": 33 no-load rows total is a real sample, not a huge one, and
+a mechanism for *why* the absence and the break are related is still the open question below,
+not yet a finding.
 
 **A decode bug hid this finding initially** and is worth remembering: `decode_frame_packet()`
 returned `None` for any record with zero USB payload bytes, before ever reading its flags
@@ -105,9 +121,9 @@ reading the raw per-capture stats directly, showed them) -- fixed by routing bot
 and desync verdict paths through one shared field set. Moral: verify a "both zero" result
 against a case that should obviously be nonzero before trusting it.
 
-**Not yet done:** running this check across all 64 main-matrix runs (needs
-`sudo python3 reprocess.py` on alsa-test to backfill the fix onto already-captured pcaps --
-no hardware re-run needed, `reprocess.py` re-walks stored pcaps).
+**Done** (2026-09-04): backfilled via `sudo /home/frank/ov_ftdi/.../reprocess.py` on
+alsa-test (now passwordless-sudo scoped, `/etc/sudoers.d/claude-ovbisect`) -- 75/75 rows
+reprocessed against the current `reframe.py`, 0 missing pcap, no hardware re-run needed.
 
 ## Why does no-load only *sometimes* fail? -- two candidate mechanisms
 
@@ -247,14 +263,16 @@ events) once run across more samples.
    result so far.
 2. Port `DRAIN_WAIT` (or the equivalent teardown fix) into `ovctl.py` itself -- the actual
    client our main matrix and any eventual upstream fix would use, not just `mincapture.py`.
-3. `sudo python3 reprocess.py` to backfill the FIRST/LAST marker fields across all 64
-   main-matrix runs -- turn the 4 hand-checked samples into a systematic answer. The
-   CSTREAM_CFG-at-setup-start diagnostic (hypothesis B) will also passively accumulate data
-   on any future `mincapture.py` run now that it's built in -- check it opportunistically,
-   no dedicated experiment needed unless drain-wait's result doesn't hold up under more N.
-4. Run the SOF-gap real-vs-inflated check on the HF0_OVF events at scale (built, not yet
-   applied broadly).
-5. Resolve the `ovf_csr` vs `ovf_pcap` discrepancy on no-load cells.
+3. ~~`sudo python3 reprocess.py` to backfill the FIRST/LAST marker fields across all 64
+   main-matrix runs~~ -- **DONE 2026-09-04**, 75/75 rows, see Session markers section above
+   for the resulting full-scale numbers. The CSTREAM_CFG-at-setup-start diagnostic
+   (hypothesis B) will also passively accumulate data on any future `mincapture.py` run now
+   that it's built in -- check it opportunistically, no dedicated experiment needed unless
+   drain-wait's result doesn't hold up under more N.
+4. ~~Run the SOF-gap real-vs-inflated check on the HF0_OVF events at scale~~ -- **DONE
+   2026-09-04**, see Overflow mechanism section above.
+5. Resolve the `ovf_csr` vs `ovf_pcap` discrepancy on no-load cells -- now confirmed solid at
+   scale (0/24 vs 22/24, see Overflow mechanism section), mechanism still unknown.
 6. Measure the byte/packet distance from session start to the first framing break across
    more no-load desync samples, and check whether it scales with ring size/throughput or
    with elapsed time -- see "Open question: why does the visible framing break wait for
