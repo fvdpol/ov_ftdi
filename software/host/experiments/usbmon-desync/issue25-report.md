@@ -122,18 +122,25 @@ come back empty and led us to a wrong preliminary conclusion.
 
 Two independent time references are used:
 
-- The **USB SOF frame number** — an 11-bit counter the host emits on the wire,
-  incrementing once per 1 ms frame (the OV3 captures a SOF packet every 125 µs,
-  but the *number* is shared across the 8 microframes of a frame; confirmed
-  because a 247 s capture contains exactly 120 wraps of the counter). A jump in
-  this number across the break is real bus time — and real traffic —
-  unaccounted for.
+- The **USB SOF stream** — the host emits a SOF packet every 125 µs (one per
+  High-Speed microframe); the 11-bit frame *number* it carries increments once
+  per 1 ms and is shared across the 8 microframes of a frame (confirmed: a 247 s
+  capture contains exactly 120 wraps of the number). So the frame number gives
+  1 ms resolution, and counting SOF packets since the last increment refines
+  that to 125 µs. A jump across the break is real bus time — and real traffic —
+  unaccounted for. *(The event-table gaps below are currently measured at the
+  1 ms frame-number level; the 125 µs microframe refinement is not yet applied
+  and would only sharpen each value, not change the picture.)*
 - The **usbmon completion timestamp** — the host kernel's wall-clock time when
   each URB of OV3 data completed. Comparing "SOF-number span" against "usbmon
   wall-clock span" over a stretch of stream tells us whether that stretch was
   delivered in real time or faster (i.e. drained from a buffer).
 
-### Q1 — where in the stream, and is it loss or extra data?
+### Q1 — where in the stream, and what kind of discontinuity is it?
+
+The original question was "did the gateware lose bytes or inject/duplicate
+them?" As shown below, the data supports neither cleanly, and points to a
+third answer (**H**).
 
 Per-event detail, regenerated from `results/manifest.jsonl` +
 `results/sof_continuity.json`:
@@ -175,21 +182,20 @@ checked and, if wrong, shown wrong:
 > reader catches up to where the current session is now writing. The visible
 > "desync" is that seam.**
 
-1. **The onset is a seam between two data sources — not loss, and not injected
-   data, within one capture.** The earlier framing of this investigation asked
-   "did the gateware drop bytes or duplicate them?" The data fits neither:
-   - The SOF frame number jumps 40 ms – ~2 s across the onset (event table),
-     which under a single-capture reading would be a large loss — but
-   - there is no duplicate-of-neighbouring-bytes signature (would indicate
-     injection / stale re-read in place), and
-   - the region *before* the onset was not delivered live (obs 3), and
-   - both framers cleanly re-lock after 110–460 bytes and run to the end of the
-     capture.
-
-   Together that is the signature of the stream switching source at a point. The
-   SOF jump is then the wall-clock gap *between* the two sources, not traffic
-   lost inside one capture. **Falsified by:** a duplicate-bytes signature at the
-   onset; SOF continuity across it (no jump); or obs 3 turning out the other way.
+1. **Loss vs. injected data is the wrong question — and that is the finding.**
+   Taken at face value the SOF frame number jumps 40 ms – ~2 s across the onset
+   (event table), which reads as a large loss. But a 40 ms – 2 s stall in an
+   FPGA-based capture pipe is not physically plausible, and there is no
+   duplicate-of-neighbouring-bytes signature that would indicate injection or a
+   stale re-read in place either. The magnitude is the tell: rather than one
+   capture with a gap, this is the stream **switching source** at a point — the
+   pre-onset bytes and the post-onset bytes come from different fills of the
+   ring (**H**), and the SOF jump is the wall-clock distance between them, not
+   traffic lost inside one session. So on the original loss-vs-extra-data axis
+   the answer is *inconclusive*; the size of the gap is what pushes past it.
+   **Falsified by:** a duplicate-bytes signature at the onset; SOF continuity
+   across it (no jump); a plausible mechanism for a multi-hundred-ms real stall;
+   or obs 3 turning out the other way.
 
 2. **It happens early, and exactly once.** Every run desyncs once, between 0.5 %
    and 2.4 % into the ~1.5 GB stream — roughly 1–6 s into a 240 s capture. After
