@@ -545,6 +545,14 @@ def main():
                          "happens')")
     ap.add_argument("--blip-window", type=int, default=256,
                     help="bytes of hex context on each side of a blip (default 256)")
+    ap.add_argument("--context-frames", type=int, default=8,
+                    help="parsed frames kept on each side of a blip for the "
+                         "PID/SOF/delta-ts checks (default 8). The SOF-gap "
+                         "check needs a SOF frame within this many parsed "
+                         "frames on BOTH sides; at ~1 SOF per 7-14 packets, 8 "
+                         "is marginal -- raise it (and --blip-window to match, "
+                         "~135 B/frame) when a run of blips all report 'no SOF "
+                         "in range'.")
     ap.add_argument("--json-summary", metavar="FILE",
                     help="write a one-line JSON verdict summary to FILE, for "
                          "run_bisect.sh to fold into results/manifest.jsonl")
@@ -587,7 +595,8 @@ def main():
         with open(args.dump_stream, "wb") as f:
             f.write(stream)
 
-    res = walk(stream, skip_startup=not args.no_skip_startup, collect_magic=0xD0)
+    res = walk(stream, skip_startup=not args.no_skip_startup, collect_magic=0xD0,
+               context_frames=args.context_frames)
 
     print("device            bus %d dev %d" % (bus, dev))
     print("reframed stream   %d bytes  (%d URB completions)"
@@ -788,7 +797,7 @@ def main():
     print("=== outer 0xD0 / service framing (the wire layer) ===")
     outer_rc, outer_summary = verdict("outer:", "outer", res, stream)
 
-    inner = walk_inner(res["subpayload"] or b"")
+    inner = walk_inner(res["subpayload"] or b"", context_frames=args.context_frames)
     print()
     print("=== inner whacker framing (0xD0 payloads -> rxcsniff records) ===")
     print("inner stream   %d bytes; frames %s"

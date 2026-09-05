@@ -58,6 +58,10 @@ def main():
     ap.add_argument("--tag", help="reprocess a single run by its tag path")
     ap.add_argument("--dump-blips", default=os.path.join(HERE, "results/blips"))
     ap.add_argument("--blip-window", type=int, default=256)
+    ap.add_argument("--context-frames", type=int, default=8,
+                    help="passed through to reframe.py -- raise it (with "
+                         "--blip-window) so the SOF-gap check has a SOF within "
+                         "range on both sides of a blip")
     ap.add_argument("--dry-run", action="store_true",
                     help="print what would change without touching anything")
     args = ap.parse_args()
@@ -87,6 +91,7 @@ def main():
         verdict_txt = r["tag"] + ".verdict.txt"
         cmd = [sys.executable, REFRAME, pcap,
                "--dump-blips", args.dump_blips, "--blip-window", str(args.blip_window),
+               "--context-frames", str(args.context_frames),
                "--json-summary", reframe_json]
         if args.dry_run:
             print("  would run: %s" % " ".join(cmd))
