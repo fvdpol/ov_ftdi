@@ -47,18 +47,32 @@ def cond_of(scenario):
     return base
 
 
+# a real 240 s run reframes to ~1 GB; a run captured against a
+# disconnected/quiet DUT reframes to a few KB. Drop those -- they are not
+# valid samples of the scenario, regardless of which batch they are in.
+MIN_REFRAMED_BYTES = 100_000
+
+
 def scenario_table(rows):
     # (gw, cond) -> [n, desync]
     agg = {}
+    dropped = 0
     for r in rows:
         sc = r.get("scenario", "")
         if "nak1" not in sc:
+            continue
+        rb = r.get("reframed_bytes") or r.get("inner_reframed_bytes")
+        if rb is not None and rb < MIN_REFRAMED_BYTES:
+            dropped += 1
             continue
         key = (gw_of(sc), cond_of(sc))
         a = agg.setdefault(key, [0, 0])
         a[0] += 1
         if r.get("inner_verdict") not in (None, "CLEAN"):
             a[1] += 1
+    if dropped:
+        sys.stderr.write("scenario_table: dropped %d dead-DUT row(s) "
+                         "(< %d reframed bytes)\n" % (dropped, MIN_REFRAMED_BYTES))
     order = {"reload": 0, "no-load": 1, "no-load + drain-wait": 2}
     lines = ["| gateware | condition | runs | desync | rate |",
              "|---|---|--:|--:|--:|"]

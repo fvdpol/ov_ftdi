@@ -77,7 +77,7 @@ Hit rate per (gateware × condition). Regenerated from `results/manifest.jsonl`:
 | bundled | reload | 8 | 0 | 0% |
 | master | reload | 8 | 0 | 0% |
 | tmon-filternak | reload | 8 | 0 | 0% |
-| bundled | no-load | 8 | 4 | 50% |
+| bundled | no-load | 31 | 17 | 55% |
 | master | no-load | 8 | 4 | 50% |
 | tmon-filternak | no-load | 8 | 4 | 50% |
 | bundled | no-load + drain-wait | 16 | 0 | 0% |
@@ -88,7 +88,7 @@ Hit rate per (gateware × condition). Regenerated from `results/manifest.jsonl`:
 | tmon-filternak | reload + drain-wait | 1 | 0 | 0% |
 | | | | | |
 | **all** | **reload** | **24** | **0** | **0%** |
-| **all** | **no-load** | **24** | **12** | **50%** |
+| **all** | **no-load** | **47** | **25** | **53%** |
 | **all** | **no-load + drain-wait** | **49** | **0** | **0%** |
 | **all** | **reload + drain-wait** | **4** | **0** | **0%** |
 <!-- END scenario-table -->
@@ -99,15 +99,18 @@ including the one before it, waited for the `HF0_LAST` marker before releasing
 the SDRAM read/sink path at teardown, instead of disabling it immediately.
 Gateware builds: `bundled` = the 2024 bitstream shipped in the fwpkg; `master` =
 current git master; `tmon-filternak` = desowin's `tmon-nordic/filter-nak`
-branch.*
+branch. The no-load `bundled` cell is larger because it pools several batches,
+including the runs with the ramp signal playing (§3 "Confirmation") — that is
+the same scenario, only the playback payload differs. Rows captured against a
+disconnected DUT (near-zero reframed bytes) are dropped.*
 
 ### Observations
 
 1. **The desync only occurs when the FPGA was not reconfigured before the run.**
-   0/24 with reload, 12/24 without. Every reload cell is clean.
+   0/24 with reload, 25/47 (53%) without. Every reload cell is clean.
 2. **Making the previous session drain cleanly eliminates it.** 0/49 no-load
    runs desync when the prior session waited for `HF0_LAST` before tearing down
-   the SDRAM path, versus 12/24 (50%) without that wait. The priming
+   the SDRAM path, versus 25/47 (53%) without that wait. The priming
    reload+drain runs are counted in the table and are also clean.
 3. **The three gateware builds behave the same.** Same ~50% no-load rate on
    each; reload and drain-wait clean on each. None of the gateware differences
@@ -118,8 +121,9 @@ branch.*
    overflow events are all bunched at the very start of the stream and then stop
    (detailed in section 3) — which does line up with the onset mechanism. Aside: the
    in-band overflow-flag count and `ovctl`'s register-read overflow count
-   disagree sharply on the no-load runs (nonzero in-band on 22/24, zero via the
-   register on 0/24) — unexplained, noted for completeness.
+   disagree sharply on the no-load runs checked for it (nonzero in-band on
+   22 of 24, zero via the register on all 24) — unexplained, noted for
+   completeness.
 
 ### Discussion — no-load vs reload vs drain
 
@@ -150,6 +154,12 @@ not something a tool can depend on.
 ---
 
 ## 3. Deep-dive: the onset of the desync
+
+The tables and per-event figures in this section come from **one batch of 12
+no-load desync runs** (`bundled`/`master`/`tmon-filternak`, `--filter-nak`,
+240 s), the set that has been through the full offline analysis pipeline. Later
+desync captures (including the ramp runs in "Confirmation" below) show the same
+shape but are not all re-analysed here.
 
 ### Method
 
@@ -380,5 +390,5 @@ not in the framer.
   measure the ramp step across the seam.
 - `aggregate.py` — per-scenario hit rates across all batches.
 - `gen_report_tables.py` — regenerate the two data tables in this document
-  (`--update issue25-report.md`; pass `--exclude-batch` for the ramp / partial
-  batches so the scenario table stays the controlled matrix).
+  (`--update issue25-report.md`). Rows captured against a disconnected DUT
+  (< 100 KB reframed) are dropped automatically.
