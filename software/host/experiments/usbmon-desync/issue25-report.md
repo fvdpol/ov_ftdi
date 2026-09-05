@@ -270,9 +270,11 @@ played *to* the DUT lands in the capture as decodable OUT data packets, giving
 the stream a ground-truth serial number it otherwise lacks.
 
 - **Signal.** A 24-bit linear ramp (S24: sample value = sample index mod 2²⁴),
-  same on every channel. It is effectively DC / sub-Hz and is blocked by the
-  DUT's AC-coupling caps, so nothing reaches the analog outputs — irrelevant
-  here, we read it off the digital samples on the wire.
+  same on every channel. It is effectively DC / sub-Hz; the DUT's service-manual
+  schematic shows DC-blocking caps between the DAC outputs and the differential
+  gain/buffer stage, so this signal cannot reach the analog outputs and cannot
+  stress them — irrelevant anyway, we read the ramp off the digital samples on
+  the wire.
 - **Rate.** Prefer **96 kHz**: ~2× the OUT data packets per second versus
   44.1 kHz, hence ~2× finer localisation of the seam and of any loss /
   duplication. The ramp wraps every ~175 s at 96 kHz (~380 s at 44.1 kHz);
