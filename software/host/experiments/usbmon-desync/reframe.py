@@ -361,6 +361,33 @@ def inner_frame_size(b):
     return frame_size(b)
 
 
+def iter_inner_frames(stream):
+    """Yield (offset, name, size) for every cleanly-parsed rxcsniff record in
+    the inner (0xD0-deframed) stream, in order -- the same contiguous walk
+    walk_inner() does (startup lock, step 1 byte over an unmatched byte, stop
+    at a trailing partial), factored out so callers can filter frames without
+    re-implementing the framer or paying walk_inner()'s per-packet analysis.
+    """
+    n = len(stream)
+    start = 0
+    for c in range(min(n, 8192)):
+        if stream[c] in (0xA0, 0xA1, 0xA2, 0xAC, 0xAD):
+            _n, sz = inner_frame_size(stream[c:c + MAX_PACKET_SIZE + 8])
+            if sz not in (None, _INCOMPLETE):
+                start = c
+                break
+    c = start
+    while c < n:
+        name, sz = inner_frame_size(stream[c:c + MAX_PACKET_SIZE + 8])
+        if sz is None:
+            c += 1
+            continue
+        if sz == _INCOMPLETE:
+            break
+        yield c, name, sz
+        c += sz
+
+
 def walk_inner(stream, context_frames=8):
     """Walk the concatenated 0xD0 payloads as a pure rxcsniff record stream.
     Same pre-/post-context tracking as walk() -- see its docstring.
