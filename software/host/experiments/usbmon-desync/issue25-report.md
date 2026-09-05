@@ -99,12 +99,22 @@ thread is the state the SDRAM capture path is left in between sessions. A
 reconfigure clears that state wholesale; a clean drain empties it. Leaving it
 alone is what fails.
 
+**Reload is not a free reset, though.** Reconfiguring the FPGA re-initialises
+the OV3's own ULPI PHY, which is electrically on the sniffed bus — on relock it
+drives an HS chirp/handshake, i.e. a real transient on the D+/D- lines the host
+and DUT share. So "just reload every time" is not a neutral init step: it can
+perturb the very link being measured (we have seen unexplained DUT drop-offs on
+this rig, not yet tied to a specific cause). Drain-wait, by contrast, touches
+only the SDRAM read/sink path and leaves the PHY and the bus alone — which is a
+point in its favour as the preferred fix, over mandating a reconfigure.
+
 From an application's point of view this matters because **a sniff tool has no
 control over how the previous tool left the device.** If a non-empty / not-fully
-reset capture path can corrupt the next session's stream, then either the client
-must force a known-good starting state (drain or reconfigure) as part of *start*,
-or the gateware must guarantee one on capture-enable. Relying on "the last user
-shut down tidily" is not something a tool can depend on.
+reset capture path can corrupt the next session's stream, then the cleanest fix
+is for the gateware to guarantee an empty ring on capture-enable, or failing
+that for the client to drain the path as part of *start*. A full reconfigure
+works but is the blunt option. Relying on "the last user shut down tidily" is
+not something a tool can depend on.
 
 ---
 
