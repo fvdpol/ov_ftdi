@@ -24,6 +24,12 @@ contradict it if the narrative were wrong.
   3 gateware tested (bundled 2024, git master, Tomasz's `tmon-nordic/filter-nak`); no-load
   13/24 (bundled 4/8, master 4/8, tmon-filternak 5/8). Matches the original N=5 finding from
   Sep 3, now with real statistical weight.
+- **Waiting for a proper drain at teardown appears to eliminate the no-load desync
+  entirely.** `DRAIN_WAIT` experiment (batch `20260905-drain-wait`, master gateware, N=8):
+  8/8 no-load runs clean when every session (including the one before it) waits for
+  `HF0_LAST` before releasing the SDRAM path, vs. the established 4/8 (50%) no-drain
+  baseline for the same condition. See the dedicated section below for the mechanism and
+  caveats (N=8/one gateware so far, not yet independently replicated).
 - **The desync is host-side framing, not wire corruption at the byte level** -- confirmed by
   usbmon capture: the outer `0xD0` service-stream layer reframes CLEAN in every single run
   so far, including every run where the inner (whacker/rxcsniff) layer or the live client
@@ -146,30 +152,39 @@ anything to it, across a number of no-load runs -- if it reads 0 every time as e
 this hypothesis's premise fails and the reordering experiment isn't worth running as
 currently framed. **Not yet done.**
 
-## Drain-wait experiment (in progress as of this writing)
+## Drain-wait experiment -- DONE, positive result
 
-Directly tests a different hypothesis: incomplete draining at a session's *teardown* leaves
-data behind that corrupts the *next* no-load session. `mincapture.py DRAIN_WAIT=1`:
-disables `CSTREAM_CFG` first (the edge that stuffs `HF0_LAST`), then actively waits (2s
-default) for that marker to actually arrive before disabling the SDRAM path -- the reverse
-of the default order, which (bug found along the way, also fixed) disabled
-`SDRAM_SINK_GO`/`HOST_READ_GO` *before* `CSTREAM_CFG`, shutting off the path that would
-carry `HF0_LAST` before the marker even existed.
+Tests a different hypothesis than (A)/(B) above: incomplete draining at a session's
+*teardown* leaves data behind (or the underlying SDRAM pipeline in a bad state) that
+corrupts the *next* no-load session. `mincapture.py DRAIN_WAIT=1`: disables `CSTREAM_CFG`
+first (the edge that stuffs `HF0_LAST`), then actively waits (2s default) for that marker
+to actually arrive before disabling the SDRAM path -- the reverse of the default order,
+which (bug found along the way, also fixed) disabled `SDRAM_SINK_GO`/`HOST_READ_GO`
+*before* `CSTREAM_CFG`, shutting off the path that would carry `HF0_LAST` before the
+marker even existed.
 
-Sequencing matters (Frank): the drain only affects how session N leaves things for N+1, so
-the test is 1 real, counted LOAD+DRAIN_WAIT priming run followed by N NOLOAD+DRAIN_WAIT
-runs back-to-back (each depends on the previous run's drain, matching how the existing
-no-load cells already run without a reload between iterations).
+Sequencing (Frank): the drain only affects how session N leaves things for N+1, so the
+test is 1 real, counted LOAD+DRAIN_WAIT priming run followed by N NOLOAD+DRAIN_WAIT runs
+back-to-back (each depends on the previous run's drain, matching how the existing no-load
+cells already run without a reload between iterations).
 
-**Provisional result (batch `20260905-drain-wait`, master gateware): 7/8 no-load+drain runs
-clean so far** (0 desync, 0 wire-level corruption), vs. an established no-drain baseline of
-4/8 (50%) for the same gateware/condition. Looks like draining does make a measurable
-difference -- final tally pending the last run. If this holds, it argues that (B) above
-(the GO-ordering race) is not the *only* thing going on, since draining at teardown
-shouldn't matter if the ONLY problem were sink/host-read GO ordering at the NEXT session's
-own startup -- unless proper draining also happens to leave the ring/pipeline in a quieter
-state that reduces how much the sink can "get ahead" during the next session's own startup
-race. Worth reconciling once both this and experiment (B) have real data.
+**Result (batch `20260905-drain-wait`, master gateware, N=8): 8/8 no-load+drain runs
+clean** -- 0 desync, 0 wire-level corruption (`inner_blip`/`outer_bad`), vs. the
+established no-drain baseline of 4/8 (50%) for the same gateware/condition. If the true
+rate were still 50%, 8/8 clean by chance is ~0.4% likely -- this looks like a real effect,
+not a fluke, though N=8 against one gateware is still a modest sample and worth expanding
+(other gateware, larger N) before calling it fully settled.
+
+**How this fits with (A)/(B) above:** `ovctl.py`'s `finally` block already sets
+`CSTREAM_CFG=0` promptly on a normal exit, so the register itself isn't stuck enabled --
+that's a different, weaker guarantee than confirming the underlying SDRAM sink pipeline
+has actually finished draining in-flight data before the next session begins writing.
+`DRAIN_WAIT` checks the latter (waits for the actual `HF0_LAST` marker to arrive) rather
+than just the former (the register write completing). This is consistent with hypothesis
+(B)'s specific mechanism (a live stream at the moment of the next session's `GO` writes)
+being wrong as stated, while still landing on "something about session-to-session
+transition state matters" as the real root cause -- just a different piece of it than
+originally guessed.
 
 ## Ruled out
 
@@ -184,15 +199,17 @@ race. Worth reconciling once both this and experiment (B) have real data.
 
 ## Open questions / next steps
 
-1. Run the SOF-gap real-vs-inflated check on the HF0_OVF events at scale (built, not yet
+1. **Expand the drain-wait result** (currently N=8, one gateware) -- more iterations,
+   other gateware, before treating it as fully settled. This is the leading actionable
+   result so far.
+2. Port `DRAIN_WAIT` (or the equivalent teardown fix) into `ovctl.py` itself -- the actual
+   client our main matrix and any eventual upstream fix would use, not just `mincapture.py`.
+3. `sudo python3 reprocess.py` to backfill the FIRST/LAST marker fields across all 64
+   main-matrix runs -- turn the 4 hand-checked samples into a systematic answer. The
+   CSTREAM_CFG-at-setup-start diagnostic (hypothesis B) will also passively accumulate data
+   on any future `mincapture.py` run now that it's built in -- check it opportunistically,
+   no dedicated experiment needed unless drain-wait's result doesn't hold up under more N.
+4. Run the SOF-gap real-vs-inflated check on the HF0_OVF events at scale (built, not yet
    applied broadly).
-2. `sudo python3 reprocess.py` to backfill the FIRST/LAST marker fields across all 64
-   main-matrix runs -- turn the 4 hand-checked samples into a systematic answer.
-3. Resolve the `ovf_csr` vs `ovf_pcap` discrepancy on no-load cells.
-4. Finish and report the drain-wait experiment's final tally.
-5. Check hypothesis B's premise directly: read `CSTREAM_CFG`'s live value at the very
-   start of a fresh no-load `setup()`, before writing anything, across several runs. Only
-   build/run the GO-reordering fix if this comes back nonzero at least sometimes.
-6. Reconcile drain-wait and GO-ordering results once both exist -- they're not necessarily
-   competing explanations, could both be contributing.
-7. Fold all of the above into the next #25 reply.
+5. Resolve the `ovf_csr` vs `ovf_pcap` discrepancy on no-load cells.
+6. Fold all of the above into the next #25 reply.
