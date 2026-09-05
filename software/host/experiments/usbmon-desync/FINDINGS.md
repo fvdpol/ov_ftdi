@@ -5,6 +5,18 @@ branch alongside the tooling it's built from -- update this as new evidence come
 than letting it live only in a GitHub comment thread. See `README.md` for how the harness
 itself works.
 
+**How to read this document.** Every hypothesis here must be traceable to something checked
+in data, code, or the gateware RTL -- not just a plausible-sounding story. Say explicitly
+what's confirmed vs. still a guess, and what would distinguish them. We do not have the
+whole picture (this is someone else's gateware, reverse-engineered from behavior and
+partial RTL reading) and have already been wrong more than once on this investigation
+specifically -- the original "start-of-stream" framing (withdrawn after Tomasz pointed out
+the data showed mid-stream events), and a decode bug that made "0 HF0_FIRST/LAST everywhere"
+look like a real finding when it was actually a bug hiding the marker on every zero-payload
+record (see the Session markers section). Treat a clean, appealing narrative as reason for
+suspicion, not confidence, until it's been checked against a case that should obviously
+contradict it if the narrative were wrong.
+
 ## Confirmed results
 
 - **Reload eliminates the desync; gateware doesn't matter.** 64-run matrix (N=8/cell,
@@ -102,30 +114,37 @@ the RTL and this is wrong as literally stated:** both `sdram_host_read.py`
 reset their respective pointers to `ring_base` on their own `GO` 0->1 edge -- reload or not.
 The pointers themselves are not stale.
 
-### (B) GO-write ordering race -- current leading hypothesis, not yet tested
+### (B) GO-write ordering race -- a hypothesis with a premise that isn't confirmed yet
 
 `mincapture.py`'s (and `ovctl.py`'s) `setup()`/`do_sniff()` writes `SDRAM_SINK_GO` and then
 `SDRAM_HOST_READ_GO` as **two separate, sequential USB control transfers**, not atomically.
-Between those two writes (a real gap -- each is its own USB round-trip):
+The idea: if the whacker's stream-enable (`CSTREAM_CFG` bit 0, `ena`) is *already* active
+when `SINK_GO`'s reset-to-`ring_base` edge fires (e.g. left on from an improperly-torn-down
+previous session), the sink could immediately start writing live data from `ring_base`
+forward, and if the gap before `HOST_READ_GO`'s own reset edge fires is long enough, the
+sink could write and wrap the 16MB ring multiple times (at the observed ~6.6MB/s, one wrap
+is ~2.4ms) before host-read's pointer resets -- host-read would then start consuming from
+`ring_base` while the *live* write position is already several wraps ahead. For a reload,
+the PHY needs to relock (HS chirp/handshake) after reconfiguration, so the same gap would
+likely be quiet on the sink side -- masking the identical race by accident.
 
-- For a **no-load** session, the ULPI PHY is already locked and streaming at full line
-  rate. The sink's `GO` takes effect first and it immediately starts writing live captured
-  data from `ring_base` -- if the gap before `HOST_READ_GO` takes effect is long enough,
-  the sink can write and wrap the 16MB ring multiple times (at the observed ~6.6MB/s, one
-  wrap is ~2.4ms) before host-read's own pointer resets. Host-read then starts consuming
-  from `ring_base` while the *live* write position is already several wraps ahead --
-  reading content that's stale relative to where the sink currently is, not because the
-  pointer failed to reset, but because it reset to the correct address at the wrong time.
-- For a **reload**, the PHY needs to relock (HS chirp/handshake) after reconfiguration, so
-  the same gap between the two `GO` writes is very likely quiet on the sink side (nothing
-  real being captured yet) -- masking the identical race by accident, not by a real fix.
-
-This explains the reload/no-load asymmetry without requiring the pointers themselves to be
-broken, and gives a specific, testable, minimal fix: **write `HOST_READ_GO=1` before
-`SDRAM_SINK_GO=1`** -- arm the read side at `ring_base` before the sink produces anything,
-so there's no window where the sink can get ahead. This is a genuine "assert a clean
-precondition at initialization" fix (Frank's framing), not a drain/workaround. **Queued as
-the next experiment** (see below); not yet built or tested.
+**This requires `ena` to already be active at the start of setup(), and that premise is NOT
+confirmed -- checked `ovctl.py`'s `do_sniff` and it has a `finally: ... CSTREAM_CFG.wr(0)`
+block, so on a *normal* exit (including its own internal `--timeout` firing, which is what
+actually ends every run in our matrix -- the external `timeout` wrapper in `run_bisect.sh`
+is only a safety net for a genuine hang) the stream should already be disabled before the
+next session's setup() runs.** So as stated, this mechanism's precondition looks like it
+shouldn't hold in the normal case -- caught this by re-reading `ovctl.py` before building
+the experiment, not after, per the standing "back it with data/code, not a good story"
+rule above. Two things could still make it real: (a) `CSTREAM_CFG`'s *register-write*
+completing doesn't necessarily mean the *hardware* has fully settled to the disabled state
+by the time the next session's writes land (a timing margin issue, not a code bug), or
+(b) there's a narrower race window even with a working `finally` block that hasn't been
+identified yet. **Before building the GO-reordering fix, the cheap, direct check is:** read
+`CSTREAM_CFG`'s live value at the very start of a fresh no-load `setup()`, before writing
+anything to it, across a number of no-load runs -- if it reads 0 every time as expected,
+this hypothesis's premise fails and the reordering experiment isn't worth running as
+currently framed. **Not yet done.**
 
 ## Drain-wait experiment (in progress as of this writing)
 
@@ -171,8 +190,9 @@ race. Worth reconciling once both this and experiment (B) have real data.
    main-matrix runs -- turn the 4 hand-checked samples into a systematic answer.
 3. Resolve the `ovf_csr` vs `ovf_pcap` discrepancy on no-load cells.
 4. Finish and report the drain-wait experiment's final tally.
-5. Build and test the GO-write-ordering fix (hypothesis B) -- likely the most direct,
-   minimal, "fix at initialization" candidate so far.
+5. Check hypothesis B's premise directly: read `CSTREAM_CFG`'s live value at the very
+   start of a fresh no-load `setup()`, before writing anything, across several runs. Only
+   build/run the GO-reordering fix if this comes back nonzero at least sometimes.
 6. Reconcile drain-wait and GO-ordering results once both exist -- they're not necessarily
    competing explanations, could both be contributing.
 7. Fold all of the above into the next #25 reply.

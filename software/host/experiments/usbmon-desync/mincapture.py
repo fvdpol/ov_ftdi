@@ -69,6 +69,17 @@ def setup(dev):
     if not dev.regs.ucfg_stat.rd():
         sys.exit("ULPI clock has not started -- oscillator?")
 
+    # #25 diagnostic (2026-09-05, FINDINGS.md hypothesis B): is CSTREAM_CFG's
+    # stream-enable bit already 1 at the start of a fresh no-load session,
+    # before this setup() writes anything? The GO-write-ordering race
+    # hypothesis requires this to sometimes be true (left on from an
+    # improperly-torn-down previous session); if it always reads 0, that
+    # hypothesis's premise fails as currently framed. Read-only, before any
+    # write -- doesn't change setup() behavior, just observes it.
+    pre_cfg = dev.regs.CSTREAM_CFG.rd()
+    print("CSTREAM_CFG at setup() start: 0x%02x (stream-enable bit already: %s)"
+          % (pre_cfg, bool(pre_cfg & 1)), flush=True)
+
     dev.regs.LEDS_MUX_2.wr(0)
     dev.regs.LEDS_OUT.wr(0)
     dev.regs.LEDS_MUX_0.wr(2)

@@ -101,7 +101,7 @@ fi
 # --- run the client ----------------------------------------------------
 # Keep only the lines that matter (desync, crash, bitstream id, PERR) so the
 # log stays small even when --format verbose dumps hundreds of MB of decode.
-KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR|[0-9]+ overflow, [0-9a-fA-F]+ total|^drain: '
+KEEP='Unmatched byte [0-9a-fA-F]+ - discarding|assert r_addr|AssertionError|ProtocolError|Traceback|Error|Bitstream timestamp|^PERR|[0-9]+ overflow, [0-9a-fA-F]+ total|^drain: |^CSTREAM_CFG at setup'
 OVCTL_FORMAT="${OVCTL_FORMAT:-custom}"    # custom = quiet; verbose = the original #25 repro
 FILTER_NAK="${FILTER_NAK:-1}"            # 1 = --filter-nak (default); 0 = off
 FILTER_SOF="${FILTER_SOF:-0}"           # 1 = --filter-sof: drops SOF only, keeps the
