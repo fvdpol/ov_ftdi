@@ -138,9 +138,16 @@ def main():
     ap.add_argument("--sof-json", default=os.path.join(HERE, "results/sof_continuity.json"))
     ap.add_argument("--update", metavar="FILE",
                     help="splice both tables into FILE between their markers")
+    ap.add_argument("--exclude-batch", action="append", default=[],
+                    metavar="BATCH",
+                    help="drop rows with this `batch` from the scenario table "
+                         "(repeatable) -- use for the ramp / partial batches so "
+                         "the scenario table stays the controlled matrix")
     args = ap.parse_args()
 
-    st = scenario_table(load_jsonl(args.manifest))
+    rows = [r for r in load_jsonl(args.manifest)
+            if r.get("batch") not in args.exclude_batch]
+    st = scenario_table(rows)
     ana = load_jsonl(args.analysis_manifest) if os.path.exists(args.analysis_manifest) else []
     sofl = json.load(open(args.sof_json)) if os.path.exists(args.sof_json) else []
     et = event_table(ana, sofl)

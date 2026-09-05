@@ -5,6 +5,34 @@
 reprocess. This is the externally-shareable summary; day-to-day working notes,
 dead ends and internal hypotheses live in `FINDINGS.md`.*
 
+## TL;DR
+
+On a `--filter-nak` sniff, LibOV's framer loses sync partway into ~half of all
+sessions that were started **without reconfiguring the FPGA first**. It is an
+**initialisation problem, not a timing or gateware bug** — all three gateware
+builds behave identically and timing closes with slack.
+
+What happens: the OpenVizsla's SDRAM capture ring is **not emptied between
+sessions**. When a new session starts, both ring pointers reset to `ring_base`
+(per the RTL) on top of the *previous* session's leftover bytes. The client
+reads that stale data out first, fast, until it catches up to where the current
+session is actually writing. That catch-up point is a **seam** between two
+unrelated stretches of capture — and it is the seam that LibOV's framer trips
+on. After it re-locks, the rest of the session is fine.
+
+This was **confirmed directly** by playing a known ramp signal into the DUT
+throughout the capture (§3, "Confirmation"): across the seam the decoded ramp
+jumps ~48 seconds *forward*, i.e. the bytes before the seam are ~48 s older than
+the bytes after it — a previous session's data.
+
+**Fixes, best to bluntest:** have the gateware guarantee an empty ring on
+capture-enable; or have the client drain the ring at start (waiting for the
+`HF0_LAST` marker at the previous teardown makes it 49/49 clean here); or
+reconfigure the FPGA before every session (works, but re-inits the OV3's own
+ULPI PHY on the sniffed bus, so it can perturb what's being measured).
+
+---
+
 **Confidence note.** Everything here is backed by captured data, the OpenVizsla
 gateware RTL, or LibOV source, and is flagged where it is still a hypothesis.
 All captures use a **Reloop Jockey 3** as the sniffed device (DUT). It is a
@@ -51,16 +79,16 @@ Hit rate per (gateware × condition). Regenerated from `results/manifest.jsonl`:
 | bundled | no-load | 8 | 4 | 50% |
 | master | no-load | 8 | 4 | 50% |
 | tmon-filternak | no-load | 8 | 4 | 50% |
-| bundled | no-load + drain-wait | 12 | 0 | 0% |
-| master | no-load + drain-wait | 9 | 0 | 0% |
-| tmon-filternak | no-load + drain-wait | 8 | 0 | 0% |
+| bundled | no-load + drain-wait | 16 | 0 | 0% |
+| master | no-load + drain-wait | 17 | 0 | 0% |
+| tmon-filternak | no-load + drain-wait | 16 | 0 | 0% |
 | bundled | reload + drain-wait | 1 | 0 | 0% |
 | master | reload + drain-wait | 2 | 0 | 0% |
 | tmon-filternak | reload + drain-wait | 1 | 0 | 0% |
 | | | | | |
 | **all** | **reload** | **24** | **0** | **0%** |
 | **all** | **no-load** | **24** | **12** | **50%** |
-| **all** | **no-load + drain-wait** | **29** | **0** | **0%** |
+| **all** | **no-load + drain-wait** | **49** | **0** | **0%** |
 | **all** | **reload + drain-wait** | **4** | **0** | **0%** |
 <!-- END scenario-table -->
 
@@ -76,7 +104,7 @@ branch.*
 
 1. **The desync only occurs when the FPGA was not reconfigured before the run.**
    0/24 with reload, 12/24 without. Every reload cell is clean.
-2. **Making the previous session drain cleanly eliminates it.** 0/29 no-load
+2. **Making the previous session drain cleanly eliminates it.** 0/49 no-load
    runs desync when the prior session waited for `HF0_LAST` before tearing down
    the SDRAM path, versus 12/24 (50%) without that wait. The priming
    reload+drain runs are counted in the table and are also clean.
@@ -185,7 +213,9 @@ delivered in real time, ≫ 1 means drained from a buffer faster than real time.
 ### Observations on the onset
 
 The observations below are organised around one hypothesis, stated so it can be
-checked and, if wrong, shown wrong:
+checked and, if wrong, shown wrong. Each was gathered before the ramp test that
+ultimately confirmed it ("Confirmation", below) — they are the indicators that
+pointed there, and they are worth keeping as an independent line of support.
 
 > **H: when the sniff session starts, the SDRAM capture ring is not empty. The
 > host reads out the previous session's left-over bytes first, fast, until the
@@ -229,7 +259,7 @@ checked and, if wrong, shown wrong:
    `ring_base` (`sdram_host_read.py` / `sdram_sink.py`), so the reader starts on
    top of the old bytes and burst-drains them until it meets the writer.
    **Supported by:** drain-wait (which empties the ring tail at the previous
-   teardown) eliminating the desync entirely (0/29). **Falsified by:** clean
+   teardown) eliminating the desync entirely (0/49). **Falsified by:** clean
    runs showing `preR ≈ 3` for their early region (they do not); or the
    ramp-signal test below showing the pre-onset payloads carry *current*-session
    values.
@@ -272,59 +302,80 @@ checked and, if wrong, shown wrong:
    first frame after re-lock as a handshake (ACK or NYET). These specifics may
    reflect this DUT's data and not generalise.
 
-### What would settle it
+### Confirmation — a known ramp signal in the OUT stream
 
-**H** predicts, and the data so far shows: a fast pre-onset drain (`preR ≫ 1`),
-a hard seam with a large SOF jump, real-time delivery after it, overflow only
-while the stale block is being drained, and the fix being to not leave a stale
-block (reload or drain-wait). All of that is inference from timing. The test
-below turns it into a direct read.
+The observations above are all inference from timing. This test turns the
+question into a direct read, and it **confirms H**.
 
-### Proposed next experiment — a known ramp signal in the OUT stream
+**Method.** The OV3 sniffs both directions of the DUT's USB traffic, so a known
+pattern played *to* the DUT lands in the capture as decodable OUT data packets,
+giving the stream a ground-truth serial number it otherwise lacks. We play a
+24-bit linear ramp (S24, sample value = sample index mod 2²⁴, same on every
+channel) into the DUT via one **continuous** `aplay -D hw:<dut>` at 96 kHz,
+native format, spanning the whole run of sniff sessions — a free-running,
+wrap-counted absolute timeline. Offline, the OUT DATA packets are pulled from
+the reframed stream and the DUT's S24↔on-wire bit-plane transform is inverted
+(validated bit-exact against the driver's codec model first) to read the ramp
+value per packet. The ramp is DC / sub-Hz and is blocked by the DUT's
+DC-coupling caps, so nothing reaches the analog outputs. This is **not a new
+scenario**: the DUT driver already runs playback URBs continuously (zero-filled
+when idle), so the ramp changes only payload *entropy*, not bus timing or load,
+and the framer keys on magic bytes, not content.
 
-The OV3 sniffs both directions of the DUT's USB traffic, so a known pattern
-played *to* the DUT lands in the capture as decodable OUT data packets, giving
-the stream a ground-truth serial number it otherwise lacks.
+Under normal live capture the ramp advances ~10 frames per OUT packet, so across
+a few-hundred-byte framing break it should barely move. If instead the pre-seam
+packets carry ramp values from an *earlier* point on the timeline, the pre-seam
+data predates the session — H confirmed. A ramp continuous across the seam would
+falsify it.
 
-- **Signal.** A 24-bit linear ramp (S24: sample value = sample index mod 2²⁴),
-  same on every channel. It is effectively DC / sub-Hz; the DUT's service-manual
-  schematic shows DC-blocking caps between the DAC outputs and the differential
-  gain/buffer stage, so this signal cannot reach the analog outputs and cannot
-  stress them — irrelevant anyway, we read the ramp off the digital samples on
-  the wire.
-- **Rate.** Prefer **96 kHz**: ~2× the OUT data packets per second versus
-  44.1 kHz, hence ~2× finer localisation of the seam and of any loss /
-  duplication. The ramp wraps every ~175 s at 96 kHz (~380 s at 44.1 kHz);
-  either is fine since the decoder tracks wrap count. Cost is ~2× larger pcaps
-  (already ~1.5 GB per run) — fall back to 44.1 kHz only if capture size becomes
-  a problem.
-- **Playback.** One **continuous** `aplay -D hw:<dut>` spanning the whole run of
-  sniff sessions — not restarted per session. Not `plughw`, 100 % volume, no
-  softvol, native rate/format: any resample, format conversion or dither
-  corrupts the ramp. A continuously running, wrap-counted ramp is an *absolute*
-  timeline across sessions.
-- **Decode.** Pull the OUT DATA packets from the reframed stream, invert the
-  DUT's S24 ↔ on-wire transform (validated bit-exact on known values first),
-  read the ramp value per sample.
-- **This is not a new scenario.** The DUT driver already runs playback URBs
-  continuously (filled with zero when idle); the ramp changes only payload
-  entropy, not bus timing or load, and the whacker framer keys on magic bytes,
-  not content. So the ramp can simply be left running for all future collection.
-- **Result.** If the pre-onset packets carry ramp values from an *earlier* point
-  on the timeline than the post-onset packets, the pre-onset data predates this
-  session — **H** confirmed directly. A ramp continuous across the onset
-  falsifies **H**. Either way it also yields exact per-packet loss /
-  duplication / reorder with no SOF-wrap ambiguity.
+**Result** (`--filter-nak`, no-load, ramp running):
+
+| run | seam @ inner offset | ramp before → after | jump across the seam |
+|---|--:|---|--:|
+| `161234Z` | 7,195,244 | 7,981,234 → 12,661,784 | **+48.8 s** |
+| `162331Z` | 16,245,862 | 3,987,940 → 8,593,220 | **+48.0 s** *(plus a +0.28 s step ~1 KB later — drain tail)* |
+| `161840Z` | 263 (at stream start) | — no pre-seam region | ramp continuous through the whole capture |
+
+The two runs with a substantial pre-seam region both show the ramp jumping
+**~48 seconds forward** across the seam: the bytes before it are ~48 s older
+than the bytes after it — **a previous session's data**, read straight off the
+wire with no SOF-wrap or `preR` inference. The third run is the complementary
+case: its seam is at byte 263, there is essentially no stale block, and the ramp
+is continuous throughout — exactly what H predicts when the ring was nearly
+empty at session start.
+
+The ~48 s is consistent between the two runs, which suggests it is a
+characteristic amount of timeline the ring holds — consistent with the previous
+session's SDRAM sink continuing to write and wrap the ring after its client
+detached, so the ring's contents span far more elapsed time than its 16 MiB
+size alone.
+
+*(More ramp captures are being collected; this table will grow.)*
 
 ---
+
+## Conclusion
+
+The ramp test confirms the hypothesis: the `--filter-nak` desync is the seam
+where a new sniff session's reader, starting on top of the previous session's
+un-cleared SDRAM ring, catches up to the live write position. It is an
+initialisation problem — no gateware timing fault is involved. The fix belongs
+at start-up (empty/clear the ring on capture-enable, in gateware or client),
+not in the framer.
 
 ## Tooling
 
 - `reframe.py` — offline reframer; `--blip-window` / `--context-frames` control
-  the event-context dump.
+  the event-context dump; `iter_inner_frames()` for reuse.
 - `reprocess.py` — re-run `reframe.py` over stored pcaps after a heuristic
   change; merges derived fields back into the manifest.
 - `sof_continuity.py` — the SOF-number vs wall-clock `preR`/`postR` analysis.
 - `scan_first_marker.py` — locate `HF0_FIRST`/`HF0_LAST` in a run's stream.
+- `ramp_wav.py` — generate the S24 ramp WAV played into the DUT.
+- `ploytec_out_decode.py` — inverse of the DUT's playback bit-plane encoder.
+- `decode_out_ramp.py` — read the ramp out of the sniffed OUT packets and
+  measure the ramp step across the seam.
 - `aggregate.py` — per-scenario hit rates across all batches.
-- `gen_report_tables.py` — regenerate the two tables in this document.
+- `gen_report_tables.py` — regenerate the two data tables in this document
+  (`--update issue25-report.md`; pass `--exclude-batch` for the ramp / partial
+  batches so the scenario table stays the controlled matrix).
