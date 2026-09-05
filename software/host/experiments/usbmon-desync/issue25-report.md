@@ -87,7 +87,7 @@ branch.*
    *where* it lands does.** Overflow fires on clean reload runs too, so "saw
    overflow" vs "desynced" are not the same thing. But within a desync run the
    overflow events are all bunched at the very start of the stream and then stop
-   (section 3, obs 4) — which does line up with the onset mechanism. Aside: the
+   (detailed in section 3) — which does line up with the onset mechanism. Aside: the
    in-band overflow-flag count and `ovctl`'s register-read overflow count
    disagree sharply on the no-load runs (nonzero in-band on 22/24, zero via the
    register on 0/24) — unexplained, noted for completeness.
@@ -205,7 +205,8 @@ checked and, if wrong, shown wrong:
    the answer is *inconclusive*; the size of the gap is what pushes past it.
    **Falsified by:** a duplicate-bytes signature at the onset; SOF continuity
    across it (no jump); a plausible mechanism for a multi-hundred-ms real stall;
-   or obs 3 turning out the other way.
+   or the pre-onset bytes proving to be live current-session capture after all
+   (the `preR` evidence below argues against that).
 
 2. **It happens early, and exactly once.** Every run desyncs once, between 0.5 %
    and 2.4 % into the ~1.5 GB stream — roughly 1–6 s into a 240 s capture. After
