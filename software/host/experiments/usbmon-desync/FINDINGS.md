@@ -197,6 +197,49 @@ originally guessed.
   all show the identical reload/no-load pattern. None of the gateware differences tested so
   far change the outcome.
 
+## Open question: why does the visible framing break wait for millions of packets?
+
+Frank, 2026-09-05. Every explanation above (A, B, and what drain-wait implies) frames the
+root cause as something wrong at or near **session start** -- a pointer/state issue in the
+first moments of a no-load session. But in the samples actually measured, the visible
+inner-layer framing break happens 14-16M bytes / packets into the capture, not at the
+start. If the root cause really is established at session start, what explains a delay of
+that scale before it becomes visible?
+
+What we actually know, not guessed:
+- The `HF0_FIRST` marker's *absence* is itself evidence of something wrong right at session
+  start (it's a marker that should appear in the first packet or not at all -- there's no
+  way for it to be "delayed", so its absence is a session-start-scoped fact, not a
+  mid-capture one).
+- The framing break itself is a separate, later, directly-observed event (an "unmatched
+  byte" the byte-hunt in `reframe.py` has to skip past).
+- We do **not** yet know whether these two facts share one root cause or are simply
+  correlated in the same runs. 4 hand-checked samples (2 clean, 2 desynced) is nowhere near
+  enough to tell, and no analysis has been done yet on *why* the gap is millions of packets
+  specifically rather than, say, thousands or tens of millions.
+
+Two ways this could resolve, both consistent with what's confirmed so far, and neither
+should be treated as more than a placeholder until checked:
+- The corrupted/misaligned state at session start doesn't immediately break framing because
+  whatever's actually in that part of the SDRAM ring still happens to parse as well-formed
+  frames for a long stretch (e.g. genuinely older but still-valid captured data) -- the
+  break only becomes visible once the read side crosses some specific boundary (a ring
+  wrap, or the point where it catches up to live data). If true, the byte/packet distance
+  to the break should correlate with the 16MB ring size or the capture's data rate, not
+  with wall-clock duration alone.
+- The framing break and the missing `FIRST` marker are two different symptoms of two
+  different (maybe related, maybe not) underlying issues, and the multi-million-packet gap
+  has no single explanation -- in which case "fixing session start" (drain-wait, GO
+  ordering) might not fully explain why it also fixes the later break, or might be fixing
+  something else that happens to correlate.
+
+**Not yet investigated. Useful next data**: for every no-load desync sample (existing and
+future), record the exact byte/packet distance from session start to the first framing
+break, and check whether it scales with ring size/throughput (bytes) or with elapsed time
+(regardless of rate) -- `reframe.py` already has everything needed for this (`overflow_
+quartile_counts`-style bucketing, applied to the framing-break offset instead of overflow
+events) once run across more samples.
+
 ## Open questions / next steps
 
 1. **Expand the drain-wait result** (currently N=8, one gateware) -- more iterations,
@@ -212,4 +255,9 @@ originally guessed.
 4. Run the SOF-gap real-vs-inflated check on the HF0_OVF events at scale (built, not yet
    applied broadly).
 5. Resolve the `ovf_csr` vs `ovf_pcap` discrepancy on no-load cells.
-6. Fold all of the above into the next #25 reply.
+6. Measure the byte/packet distance from session start to the first framing break across
+   more no-load desync samples, and check whether it scales with ring size/throughput or
+   with elapsed time -- see "Open question: why does the visible framing break wait for
+   millions of packets?" above. Needed to know whether the framing break and the missing
+   FIRST marker are actually the same root cause or just correlated.
+7. Fold all of the above into the next #25 reply.
