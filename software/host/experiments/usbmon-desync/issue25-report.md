@@ -260,11 +260,42 @@ checked and, if wrong, shown wrong:
 **H** predicts, and the data so far shows: a fast pre-onset drain (`preR ≫ 1`),
 a hard seam with a large SOF jump, real-time delivery after it, overflow only
 while the stale block is being drained, and the fix being to not leave a stale
-block (reload or drain-wait). The decisive test is a **known ramp signal played
-continuously into the DUT** across sessions: decode the sniffed OUT packets and
-read the ramp value. If the pre-onset bytes carry ramp values from an *earlier*
-wall-clock moment than the post-onset bytes, **H** is confirmed directly; if
-they are continuous with the post-onset stream, **H** is wrong.
+block (reload or drain-wait). All of that is inference from timing. The test
+below turns it into a direct read.
+
+### Proposed next experiment — a known ramp signal in the OUT stream
+
+The OV3 sniffs both directions of the DUT's USB traffic, so a known pattern
+played *to* the DUT lands in the capture as decodable OUT data packets, giving
+the stream a ground-truth serial number it otherwise lacks.
+
+- **Signal.** A 24-bit linear ramp (S24: sample value = sample index mod 2²⁴),
+  same on every channel. It is effectively DC / sub-Hz and is blocked by the
+  DUT's AC-coupling caps, so nothing reaches the analog outputs — irrelevant
+  here, we read it off the digital samples on the wire.
+- **Rate.** Prefer **96 kHz**: ~2× the OUT data packets per second versus
+  44.1 kHz, hence ~2× finer localisation of the seam and of any loss /
+  duplication. The ramp wraps every ~175 s at 96 kHz (~380 s at 44.1 kHz);
+  either is fine since the decoder tracks wrap count. Cost is ~2× larger pcaps
+  (already ~1.5 GB per run) — fall back to 44.1 kHz only if capture size becomes
+  a problem.
+- **Playback.** One **continuous** `aplay -D hw:<dut>` spanning the whole run of
+  sniff sessions — not restarted per session. Not `plughw`, 100 % volume, no
+  softvol, native rate/format: any resample, format conversion or dither
+  corrupts the ramp. A continuously running, wrap-counted ramp is an *absolute*
+  timeline across sessions.
+- **Decode.** Pull the OUT DATA packets from the reframed stream, invert the
+  DUT's S24 ↔ on-wire transform (validated bit-exact on known values first),
+  read the ramp value per sample.
+- **This is not a new scenario.** The DUT driver already runs playback URBs
+  continuously (filled with zero when idle); the ramp changes only payload
+  entropy, not bus timing or load, and the whacker framer keys on magic bytes,
+  not content. So the ramp can simply be left running for all future collection.
+- **Result.** If the pre-onset packets carry ramp values from an *earlier* point
+  on the timeline than the post-onset packets, the pre-onset data predates this
+  session — **H** confirmed directly. A ramp continuous across the onset
+  falsifies **H**. Either way it also yields exact per-packet loss /
+  duplication / reorder with no SOF-wrap ambiguity.
 
 ---
 
