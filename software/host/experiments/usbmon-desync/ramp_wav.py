@@ -33,29 +33,41 @@ def s24_3le(value):
     return bytes((value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF))
 
 
-def build(rate, channels):
-    n = WRAP
+def _wav_header(rate, channels, data_len):
+    """canonical 44-byte PCM WAV header, S24_3LE (wFormatTag=1, 24 bits)."""
     frame_bytes = 3 * channels
-    data_len = n * frame_bytes
-
-    # canonical 44-byte PCM WAV header, S24_3LE (wFormatTag=1, 24 bits)
     byte_rate = rate * frame_bytes
     hdr = b"RIFF" + struct.pack("<I", 36 + data_len) + b"WAVE"
     hdr += b"fmt " + struct.pack("<IHHIIHH",
                                  16, 1, channels, rate, byte_rate,
                                  frame_bytes, 24)
     hdr += b"data" + struct.pack("<I", data_len)
+    return hdr
+
+
+def build(rate, channels):
+    n = WRAP
+    frame_bytes = 3 * channels
+    data_len = n * frame_bytes
+    hdr = _wav_header(rate, channels, data_len)
+
+    try:
+        import numpy as np
+        idx = np.arange(n, dtype=np.uint32)
+        b = np.empty((n, 3), dtype=np.uint8)
+        b[:, 0] = idx & 0xFF
+        b[:, 1] = (idx >> 8) & 0xFF
+        b[:, 2] = (idx >> 16) & 0xFF
+        frame = np.tile(b, (1, channels))          # (n, 3*channels), all ch equal
+        return hdr + frame.tobytes()
+    except ImportError:
+        pass
 
     buf = bytearray(len(hdr) + data_len)
     buf[:len(hdr)] = hdr
     pos = len(hdr)
-    # precompute the 3-byte pattern for a full 256-sample window? no -- every
-    # sample is distinct. Build per channel-frame; channels all carry the same
-    # value so one s24_3le() call per sample, repeated `channels` times.
     for i in range(n):
-        b = s24_3le(i)
-        row = b * channels
-        buf[pos:pos + frame_bytes] = row
+        buf[pos:pos + frame_bytes] = s24_3le(i) * channels
         pos += frame_bytes
     return bytes(buf)
 
