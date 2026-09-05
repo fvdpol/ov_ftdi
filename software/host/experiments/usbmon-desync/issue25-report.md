@@ -8,12 +8,17 @@ dead ends and internal hypotheses live in `FINDINGS.md`.*
 **Confidence note.** Everything here is backed by captured data, the OpenVizsla
 gateware RTL, or LibOV source, and is flagged where it is still a hypothesis.
 All captures use a **Reloop Jockey 3** as the sniffed device (DUT). It is a
-High-Speed device with a fairly idle bus under `--filter-nak`, and its traffic
-carries no timestamp or sequence field of its own, so some of the fine detail
-below (packet types either side of the event, the byte pattern at the trip
-point) may be specific to this DUT's data and not general. We have already
-revised two conclusions in this investigation as better data arrived; treat a
-tidy story as a prompt to check it further.
+High-Speed device whose driver keeps playback/capture URBs flowing continuously,
+so the bus is steadily busy; under `--filter-nak` most of what survives the
+filter is SOF plus the playback stream, whose payload here is low-entropy
+(mostly zero). The DUT's traffic carries no timestamp or sequence field of its
+own, so some of the fine detail below (packet types either side of the event,
+the byte pattern at the trip point) may be specific to this DUT's data and not
+general. We have already revised three conclusions in this investigation as
+better data arrived — a "start-of-stream" framing the data later contradicted; a
+decode bug that made a marker look absent everywhere; and a "byte-sync slip, no
+data loss" reading that a wider analysis window overturned — so treat a tidy
+story as a prompt to check it further.
 
 ---
 
@@ -78,13 +83,14 @@ branch.*
 3. **The three gateware builds behave the same.** Same ~50% no-load rate on
    each; reload and drain-wait clean on each. None of the gateware differences
    we tested changes the outcome.
-4. **RX-path overflow (`HF0_OVF`) is present but does not track the desync.** It
-   fires on clean reload runs too, at a similar rate, so "saw overflow" and
-   "desynced" are independent here. Its in-band flag count and `ovctl`'s
-   register-read overflow count also disagree sharply on the no-load runs
-   (nonzero in-band on 22/24, zero via the register on 0/24) — noted for
-   completeness; we do not think overflow is the mechanism behind #25 and are
-   not relying on it in the discussion below.
+4. **RX-path overflow (`HF0_OVF`) — presence alone doesn't discriminate, but
+   *where* it lands does.** Overflow fires on clean reload runs too, so "saw
+   overflow" vs "desynced" are not the same thing. But within a desync run the
+   overflow events are all bunched at the very start of the stream and then stop
+   (section 3, obs 4) — which does line up with the onset mechanism. Aside: the
+   in-band overflow-flag count and `ovctl`'s register-read overflow count
+   disagree sharply on the no-load runs (nonzero in-band on 22/24, zero via the
+   register on 0/24) — unexplained, noted for completeness.
 
 ### Discussion — no-load vs reload vs drain
 
@@ -135,87 +141,130 @@ Per-event detail, regenerated from `results/manifest.jsonl` +
 <!-- BEGIN event-table -->
 | run | gw | byte offset | % of stream | skip B | SOF gap (ms) | pre->post PID | preR | postR |
 |---|---|--:|--:|--:|--:|---|--:|--:|
-| 20260904T180037Z | tmon-filternak | 7,092,614 | 0.5% | 261 | 2027 | DATA0 -> NYET | 4.13 | 1.00 |
+| 20260904T180037Z | tmon-filternak | 7,092,614 | 0.5% | 261 | 2027 | DATA0 -> NYET | 4.11 | 1.00 |
 | 20260904T183016Z | tmon-filternak | 7,298,207 | 0.5% | 420 | 45 | DATA0 -> NYET | 4.05 | 1.00 |
-| 20260904T165121Z | bundled | 7,302,382 | 0.5% | 211 | 400 | DATA0 -> NYET | 4.10 | 1.00 |
-| 20260904T181030Z | tmon-filternak | 10,792,347 | 0.7% | 227 | 1306 | DATA0 -> ACK | 4.18 | 1.00 |
-| 20260904T174557Z | master | 12,849,978 | 0.9% | 408 | 1219 | DATA0 -> ACK | 4.01 | 1.00 |
-| 20260904T182022Z | tmon-filternak | 14,190,868 | 1.0% | 262 | 387 | DATA1 -> ACK | 4.03 | 1.00 |
+| 20260904T165121Z | bundled | 7,302,382 | 0.5% | 211 | 400 | DATA0 -> NYET | 4.08 | 1.00 |
+| 20260904T181030Z | tmon-filternak | 10,792,347 | 0.7% | 227 | 1306 | DATA0 -> ACK | 4.16 | 1.00 |
+| 20260904T174557Z | master | 12,849,978 | 0.9% | 408 | 1219 | DATA0 -> ACK | 4.02 | 1.00 |
+| 20260904T182022Z | tmon-filternak | 14,190,868 | 1.0% | 262 | 387 | DATA1 -> ACK | 4.01 | 1.00 |
 | 20260904T164128Z | bundled | 14,396,843 | 1.0% | 459 | 964 | DATA0 -> ACK | 4.10 | 1.00 |
-| 20260904T172104Z | master | 16,454,024 | 1.1% | 112 | 712 | DATA0 -> NYET | 3.99 | 1.00 |
-| 20260904T170621Z | bundled | 17,070,857 | 1.2% | 457 | 1153 | DATA0 -> ACK | 2.85 | 1.00 |
-| 20260904T173603Z | master | 17,071,164 | 1.2% | 196 | 920 | DATA1 -> NYET | 2.81 | 1.00 |
-| 20260904T170115Z | bundled | 24,987,229 | 1.7% | 214 | 214 | DATA0 -> ACK | 3.89 | 1.00 |
-| 20260904T173057Z | master | 36,302,966 | 2.4% | 274 | 40 | DATA0 -> NYET | 4.18 | 1.00 |
+| 20260904T172104Z | master | 16,454,024 | 1.1% | 112 | 712 | DATA0 -> NYET | 3.98 | 1.00 |
+| 20260904T170621Z | bundled | 17,070,857 | 1.2% | 457 | 1153 | DATA0 -> ACK | 2.83 | 1.00 |
+| 20260904T173603Z | master | 17,071,164 | 1.2% | 196 | 920 | DATA1 -> NYET | 2.80 | 1.00 |
+| 20260904T170115Z | bundled | 24,987,229 | 1.7% | 315 | 214 | DATA0 -> ACK | 3.90 | 1.00 |
+| 20260904T173057Z | master | 36,302,966 | 2.4% | 274 | 40 | DATA0 -> NYET | 4.20 | 1.00 |
 <!-- END event-table -->
 
 *`% of stream` = position of the break in the full ~1.5 GB inner stream. `skip
 B` = bytes the reframer discarded to re-lock (LibOV's live framer discards a
 comparable 260–770 bytes and also recovers). `SOF gap` = jump in the SOF frame
-number across the break, in ms (mod 2048; for the larger values the true gap may
-be that + a multiple of 2048 ms). `preR` / `postR` = ratio of SOF-number span to
-usbmon wall-clock span for the region before / after the break.*
+number across the break, in ms — the frame number increments once per 1 ms, so
+the value is milliseconds directly (it is read mod 2048, so for the largest
+entries the true gap could be that + a multiple of 2048 ms; wall-clock across
+the seam is a lower bound at ~272 ms either way). `preR` / `postR` = SOF-number
+span ÷ usbmon wall-clock span for the region before / after the break; ≈ 1 means
+delivered in real time, ≫ 1 means drained from a buffer faster than real time.*
 
 ### Observations on the onset
 
-1. **It is data loss, not injected/extra data.** Every event shows a real SOF
-   frame-number discontinuity — 40 ms to ~2 s of bus time (and therefore real
-   captured traffic) missing across the break. The number of bytes the reframer
-   skips to re-lock (110–460) is unrelated to the size of that gap; the skip is
-   just the local cost of finding the next frame anchor, not a measure of the
-   loss. There is no duplicate-of-neighbouring-bytes signature, so nothing
-   points to stale data being *re-read* in place either.
+The observations below are organised around one hypothesis, stated so it can be
+checked and, if wrong, shown wrong:
 
-2. **It happens early, and once.** Every run desyncs exactly once, between 0.5 %
-   and 2.4 % into the stream — roughly 1–6 s into a 240 s capture. After
-   re-locking, both the offline reframer and LibOV's live framer run clean to
-   the end. (An earlier note that it was "millions of packets in" was wrong; it
-   was reading an absolute byte offset, not a packet count.)
+> **H: when the sniff session starts, the SDRAM capture ring is not empty. The
+> host reads out the previous session's left-over bytes first, fast, until the
+> reader catches up to where the current session is now writing. The visible
+> "desync" is that seam.**
 
-3. **The data *before* the break was not captured live.** For every event, the
-   region before the break has `preR ≈ 3–4`: it spans 3–4× more bus time (SOF
-   milliseconds) than the wall-clock time the host took to receive it — i.e. it
-   was delivered as a fast drain of buffered data. The region *after* the break
-   has `postR = 1.00` in every run: real-time delivery. The pre-break region is
-   also internally continuous (no missing SOF milliseconds within it) and is
-   followed by a single clean jump. **Working hypothesis (matches desowin's):
-   the SDRAM ring was not empty when the session started — the pre-break bytes
-   are left over from the previous session, read out fast until the reader
-   catches up to where the current session is actually writing (the break), and
-   the "loss" is that seam.** A gateware-level mechanism is consistent with
-   this: a non-drained teardown never zeroes the 16 MiB ring, and on the next
-   `GO` edge both the read and write pointers reset to `ring_base` (per
-   `sdram_host_read.py` / `sdram_sink.py`), so the reader starts on top of the
-   old bytes. *(A control check — does a clean run's early region also show
-   `preR ≈ 3`? — is in progress; if it does, fast early delivery is just normal
-   and this argument weakens.)*
+1. **The onset is a seam between two data sources — not loss, and not injected
+   data, within one capture.** The earlier framing of this investigation asked
+   "did the gateware drop bytes or duplicate them?" The data fits neither:
+   - The SOF frame number jumps 40 ms – ~2 s across the onset (event table),
+     which under a single-capture reading would be a large loss — but
+   - there is no duplicate-of-neighbouring-bytes signature (would indicate
+     injection / stale re-read in place), and
+   - the region *before* the onset was not delivered live (obs 3), and
+   - both framers cleanly re-lock after 110–460 bytes and run to the end of the
+     capture.
 
-4. **No correlation with gateware version.** The three builds are interleaved
-   through the offset-sorted table with no grouping; the two runs that break
-   within 307 bytes of the same offset (~17.07 MB) are different builds
-   (`bundled` and `master`).
+   Together that is the signature of the stream switching source at a point. The
+   SOF jump is then the wall-clock gap *between* the two sources, not traffic
+   lost inside one capture. **Falsified by:** a duplicate-bytes signature at the
+   onset; SOF continuity across it (no jump); or obs 3 turning out the other way.
 
-5. **The wall-clock cost of the break is fixed.** Across all 12 events the
-   usbmon wall-clock advances ~272 ms (272–289) between the last pre-break byte
-   and the first post-break byte, regardless of gateware and regardless of the
-   SOF-gap size. A fixed ~272 ms cost points to a fixed operation at the seam (a
-   timeout or settle), not a variable stall.
+2. **It happens early, and exactly once.** Every run desyncs once, between 0.5 %
+   and 2.4 % into the ~1.5 GB stream — roughly 1–6 s into a 240 s capture. After
+   re-locking, both the offline reframer and LibOV's live framer run clean to the
+   end. (An earlier note that it was "millions of packets in" was wrong — that
+   read an absolute byte offset as a packet count.)
 
-6. **The session-start marker is missing.** LibOV stuffs an `HF0_FIRST` marker
-   packet on the `CSTREAM_CFG` enable edge, and gates all packet handling on
-   having seen it. Clean runs have exactly one, at packet #1. **All 12 desync
-   runs have none at all.** This is consistent with the marker being generated
-   at the current session's true start — i.e. at or inside the seam — and lost
-   with the rest of the gap. *(Exact-location scan of every desync run's stream
-   in progress.)* One caveat: a single clean drain-wait run has also now turned
-   up with no `HF0_FIRST` and no desync, so a missing marker is not on its own a
-   guarantee of trouble.
+3. **The bytes before the onset were not captured live — they were drained from
+   a buffer.** For every event the pre-onset region has `preR ≈ 2.8–4.2`: it
+   spans that many times more bus time (SOF milliseconds) than the wall-clock
+   the host took to receive it. The post-onset region has `postR = 1.00` in
+   every run — real-time. Control: three clean runs (1 reload, 2 no-load), split
+   at the same ~10 MB point, show early-region `preR ≈ 0.4–0.7` — below 1, and
+   4–10× lower than any desync run, so a fast early burst is *not* just normal.
+   The pre-onset block is also internally near-continuous (0–3 SOF gaps, all
+   ≤ 4 ms; clean runs by comparison carry ~45 gaps of ≤ 8 ms), and the onset gap
+   is 5–250× larger than any of those. This is **H**'s central claim; it is
+   consistent with the gateware: a non-drained teardown never zeroes the 16 MiB
+   ring, and the next `GO` edges reset both the read and write pointers to
+   `ring_base` (`sdram_host_read.py` / `sdram_sink.py`), so the reader starts on
+   top of the old bytes and burst-drains them until it meets the writer.
+   **Supported by:** drain-wait (which empties the ring tail at the previous
+   teardown) eliminating the desync entirely (0/29). **Falsified by:** clean
+   runs showing `preR ≈ 3` for their early region (they do not); or the
+   ramp-signal test below showing the pre-onset payloads carry *current*-session
+   values.
 
-7. **Byte context at the trip point (likely DUT-specific).** The break always
+4. **RX-path overflow is concentrated entirely in the first quartile, then
+   stops.** Splitting each desync run into four equal byte ranges: 10/12 runs
+   have 137–700 `HF0_OVF` events, *all* in the first quartile; the other 2 runs
+   have none; no run has any overflow in quartiles 2–4. Under **H** this is
+   expected — the ring is full of stale data at session start, so the sink
+   overflows against it until the reader drains past and frees space (the
+   onset), after which the ring has headroom. The two zero-overflow runs are
+   also the two with the lowest `preR` (2.80, 2.83) — the least backlog to
+   drain. **Falsified by:** overflow spread through a desync run, or appearing
+   in its later quartiles.
+
+5. **No correlation with gateware version.** The three builds interleave through
+   the offset-sorted event table with no grouping; the two runs that break
+   within 307 bytes of the same offset (~17.07 MB) are *different* builds
+   (`bundled`, `master`).
+
+6. **The wall-clock cost of the seam is fixed.** Across all 12 events the usbmon
+   wall-clock advances ~272 ms (272–289) between the last pre-onset byte and the
+   first post-onset byte — independent of gateware and of the SOF-gap size. A
+   fixed cost points to a fixed operation at the seam (a timeout or settle), not
+   a variable stall. Not yet tied to a specific step in the gateware or client.
+
+7. **The session-start marker is missing from the whole stream.** The gateware
+   stuffs an `HF0_FIRST` marker on the `CSTREAM_CFG` enable edge, and LibOV
+   gates all packet handling on having seen it; clean runs have exactly one, at
+   packet #1. A direct scan (robust to the framing break) finds **no `HF0_FIRST`
+   anywhere in any of the 12** — not displaced, absent. Under **H** a plausible
+   reason is that a full ring at `CSTREAM_CFG` enable has no room to stuff the
+   marker, but that is not confirmed; reported as an observation. Caveat on
+   using the marker as a tell: one clean drain-wait run has also turned up with
+   no `HF0_FIRST` and no desync.
+
+8. **Byte context at the trip point (likely DUT-specific).** The break always
    lands inside the low-entropy zero/pad tail of a 520-byte data frame; the last
    valid frame before it decodes as a USB DATA0/DATA1 packet in all 12, and the
    first frame after re-lock as a handshake (ACK or NYET). These specifics may
-   reflect this DUT's idle-bus data and not generalise.
+   reflect this DUT's data and not generalise.
+
+### What would settle it
+
+**H** predicts, and the data so far shows: a fast pre-onset drain (`preR ≫ 1`),
+a hard seam with a large SOF jump, real-time delivery after it, overflow only
+while the stale block is being drained, and the fix being to not leave a stale
+block (reload or drain-wait). The decisive test is a **known ramp signal played
+continuously into the DUT** across sessions: decode the sniffed OUT packets and
+read the ramp value. If the pre-onset bytes carry ramp values from an *earlier*
+wall-clock moment than the post-onset bytes, **H** is confirmed directly; if
+they are continuous with the post-onset stream, **H** is wrong.
 
 ---
 

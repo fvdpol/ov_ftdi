@@ -107,15 +107,30 @@ def inner_sofs(inner):
 
 
 def continuity(sofs):
-    """(violations, total_steps) -- consecutive captured SOF numbers should
-    step by 0 (another microframe of the same ms frame) or 1 (next ms). A
-    step of 2+ mod 2048 means one or more whole milliseconds have no SOF at
-    all between these two -- a real gap."""
-    v = 0
+    """(n_violations, total_steps, max_gap_ms, gap_hist) -- consecutive captured
+    SOF numbers should step by 0 (another microframe of the same ms frame) or 1
+    (next ms). A step of 2+ mod 2048 means that many whole milliseconds have no
+    SOF at all between these two -- a real gap. gap_hist buckets the >=2 gaps so
+    a clean run's "dozens of tiny hiccups" can be told apart from a desync run's
+    "one big jump"."""
+    gaps = []
     for (_o0, a), (_o1, b) in zip(sofs, sofs[1:]):
-        if (b - a) % WRAP >= 2:
-            v += 1
-    return v, max(0, len(sofs) - 1)
+        step = (b - a) % WRAP
+        if step >= 2:
+            gaps.append(step)
+    hist = collections.Counter()
+    for g in gaps:
+        if g <= 3:
+            hist["2-3ms"] += 1
+        elif g <= 10:
+            hist["4-10ms"] += 1
+        elif g <= 50:
+            hist["11-50ms"] += 1
+        elif g <= 200:
+            hist["51-200ms"] += 1
+        else:
+            hist[">200ms"] += 1
+    return len(gaps), max(0, len(sofs) - 1), (max(gaps) if gaps else 0), dict(hist)
 
 
 def unwrap(sofs):
@@ -153,19 +168,31 @@ def analyze(pcap, drop_first, drop_last):
         r["error"] = "pre/post too small (%d/%d)" % (len(pre), len(post))
         return r
 
-    pre_v, pre_steps = continuity(pre)
-    post_v, post_steps = continuity(post)
+    pre_v, pre_steps, pre_maxgap, pre_hist = continuity(pre)
+    post_v, post_steps, post_maxgap, post_hist = continuity(post)
     r["pre_continuity_violations"] = pre_v
     r["post_continuity_violations"] = post_v
     r["pre_steps"] = pre_steps
     r["post_steps"] = post_steps
+    r["pre_max_gap_ms"] = pre_maxgap
+    r["post_max_gap_ms"] = post_maxgap
+    r["pre_gap_hist"] = pre_hist
+    r["post_gap_hist"] = post_hist
 
     # region spans: SOF-number advance (= ms of bus time) vs usbmon wall-clock
     # elapsed (also ms) over the same byte range. ratio ~= 1 => that region was
     # delivered to the host in real time (live). ratio >> 1 => the region's
     # frames span more bus time than the host took to receive them, i.e. a
     # backlog / stale burst being drained.
+    # skip the first LEAD_SKIP bytes of a region: at capture start the first
+    # SOF can be timestamped against an early sparse URB, inflating wc_ms and
+    # depressing the ratio. Dropping ~1 MB of lead removes that without
+    # materially shortening a multi-MB region. (Both clean and desync pre-
+    # regions get the same treatment, so it can't manufacture a difference.)
+    LEAD_SKIP = 1_000_000
+
     def region(seg):
+        seg = [s for s in seg if s[0] >= seg[0][0] + LEAD_SKIP] or seg
         o0, _n0 = seg[0]
         oN, _nN = seg[-1]
         wc0 = wc_of_inner(o0, segments, chunk_meta)
@@ -257,21 +284,22 @@ def main():
         sys.exit("nothing to do")
 
     results = []
-    hdr = ("%-28s %6s %8s %8s  %5s %5s  %8s %9s %4s  %7s %7s"
-           % ("run", "npre", "preViol", "postViol", "", "",
-              "SOFgapms", "wcGap_ms", "k", "preR", "postR"))
+    hdr = ("%-26s %7s  %6s %7s  %6s %7s  %8s %8s %4s  %6s %6s"
+           % ("run", "npre",
+              "preViol", "preMaxms", "poViol", "poMaxms",
+              "SOFgapms", "wcGapms", "k", "preR", "postR"))
     print(hdr)
     print("-" * len(hdr))
     for pcap, df, dl in jobs:
         r = analyze(pcap, df, dl)
         results.append(r)
         if "error" in r:
-            print("%-28s  ERROR: %s" % (r["pcap"], r["error"]))
+            print("%-26s  ERROR: %s" % (r["pcap"], r["error"]))
             continue
-        print("%-28s %6d %8d %8d  %5s %5s  %8s %9s %4s  %7s %7s"
+        print("%-26s %7d  %6d %7d  %6d %7d  %8s %8s %4s  %6s %6s"
               % (r["pcap"].replace(".pcap", ""), r["n_pre"],
-                 r["pre_continuity_violations"], r["post_continuity_violations"],
-                 "", "",
+                 r["pre_continuity_violations"], r["pre_max_gap_ms"],
+                 r["post_continuity_violations"], r["post_max_gap_ms"],
                  r["sof_gap_ms_mod"], r.get("wc_gap_ms", "?"),
                  r.get("wrap_k_est", "?"),
                  ("%.2f" % r["pre_ratio"]) if r.get("pre_ratio") else "?",
