@@ -29,7 +29,8 @@ the bytes after it — a previous session's data.
 capture-enable; or have the client drain the ring at start (waiting for the
 `HF0_LAST` marker at the previous teardown makes it 49/49 clean here); or
 reconfigure the FPGA before every session (works, but re-inits the OV3's own
-ULPI PHY on the sniffed bus, so it can perturb what's being measured).
+ULPI PHY on the sniffed bus — which has twice knocked this DUT off the bus at
+sniff start with no auto-recovery, so it is not a free operation).
 
 ---
 
@@ -130,11 +131,13 @@ alone is what fails.
 **Reload is not a free reset, though.** Reconfiguring the FPGA re-initialises
 the OV3's own ULPI PHY, which is electrically on the sniffed bus — on relock it
 drives an HS chirp/handshake, i.e. a real transient on the D+/D- lines the host
-and DUT share. So "just reload every time" is not a neutral init step: it can
-perturb the very link being measured (we have seen unexplained DUT drop-offs on
-this rig, not yet tied to a specific cause). Drain-wait, by contrast, touches
-only the SDRAM read/sink path and leaves the PHY and the bus alone — which is a
-point in its favour as the preferred fix, over mandating a reconfigure.
+and DUT share. This is not theoretical: on this rig we have **at least twice
+seen the DUT drop off the bus at the exact moment a sniff was started, and not
+recover on its own** (a manual power-cycle was needed). So "just reload every
+time" is not a neutral init step — it can disturb, and has disturbed, the very
+link being measured. Drain-wait, by contrast, touches only the SDRAM read/sink
+path and leaves the PHY and the bus alone — a point in its favour as the
+preferred fix, over mandating a reconfigure.
 
 From an application's point of view this matters because **a sniff tool has no
 control over how the previous tool left the device.** If a non-empty / not-fully
