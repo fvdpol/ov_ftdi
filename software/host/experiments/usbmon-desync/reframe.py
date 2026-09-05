@@ -715,15 +715,39 @@ def main():
             "typical_delta_ts_us": cls["typical_delta_ts_us"],
         }
 
+    def session_wide_fields(r):
+        # Everything walk_inner() computes once for the WHOLE capture, not
+        # per desync event -- must be copied into both verdict() branches
+        # (CLEAN and desync) or it silently never reaches the json-summary/
+        # manifest for whichever branch a given run happens to take. Bug
+        # caught 2026-09-05: the CLEAN branch was missing all of this, so
+        # every clean run's FIRST/LAST markers and overflow SOF-gap stats
+        # were visible in the console print (which reads `r` directly) but
+        # never made it into aggregate.py/the manifest.
+        return {
+            "packets_total": r.get("packets_total"),
+            "overflow_packets": r.get("overflow_packets"),
+            "perr_packets": r.get("perr_packets"),
+            "overflow_sof_gap_gt1": r.get("overflow_sof_gap_gt1"),
+            "overflow_sof_gap_le1": r.get("overflow_sof_gap_le1"),
+            "overflow_sof_gap_unresolved": r.get("overflow_sof_gap_unresolved"),
+            "overflow_sof_gap_max": r.get("overflow_sof_gap_max"),
+            "overflow_quartile_counts": r.get("overflow_quartile_counts"),
+            "first_marker_count": r.get("first_marker_count"),
+            "first_marker_offset": r.get("first_marker_offset"),
+            "first_marker_packet_num": r.get("first_marker_packet_num"),
+            "last_marker_count": r.get("last_marker_count"),
+            "last_marker_offset": r.get("last_marker_offset"),
+            "last_marker_packet_num": r.get("last_marker_packet_num"),
+        }
+
     def verdict(label, layer_tag, r, buf, to_outer_offset=lambda o: o):
         um = r["unmatched"]
         if not um:
             print("%-14s CLEAN" % label)
             return 0, {
                 "verdict": "CLEAN", "unmatched": 0, "events": [],
-                "packets_total": r.get("packets_total"),
-                "overflow_packets": r.get("overflow_packets"),
-                "perr_packets": r.get("perr_packets"),
+                **session_wide_fields(r),
             }
 
         runs = group_runs(um)
@@ -756,12 +780,7 @@ def main():
             "wallclock": first["wallclock"],
             "clean_frames_after_last": r["clean_frames_after_last_unmatched"],
             "events": events,
-            # in-band overflow/PERR flag tally (inner layer only -- see
-            # walk_inner's docstring); None for the outer layer, which
-            # doesn't decode rxcsniff flags at all.
-            "packets_total": r.get("packets_total"),
-            "overflow_packets": r.get("overflow_packets"),
-            "perr_packets": r.get("perr_packets"),
+            **session_wide_fields(r),
         }
         return (0 if r["recovered"] else 1), summary
 
