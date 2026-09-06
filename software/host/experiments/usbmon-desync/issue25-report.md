@@ -27,6 +27,12 @@ throughout the capture (§3, "Confirmation"): across the seam the decoded ramp
 jumps ~48 seconds *forward*, i.e. the bytes before the seam are ~48 s older than
 the bytes after it — a previous session's data.
 
+The dirty ring is there in *every* filter mode, but the framer only loses lock
+under `--filter-nak` — because that is the only mode whose stream, after the
+initial stale-data burst, offers nothing (`HF0_FIRST` gone, no more overflow
+markers, sparse frame boundaries) to pull the framer back into alignment at the
+seam. A dense stream re-locks within microseconds. See the last chapter.
+
 **Fixes, best to bluntest:** have the gateware guarantee an empty ring on
 capture-enable; or have the client drain the ring at start (waiting for the
 `HF0_LAST` marker at the previous teardown makes it 49/49 clean here); or
@@ -79,9 +85,9 @@ Hit rate per (gateware × condition). Regenerated from `results/manifest.jsonl`:
 | bundled | reload | 8 | 0 | 0% |
 | master | reload | 8 | 0 | 0% |
 | tmon-filternak | reload | 8 | 0 | 0% |
-| bundled | no-load | 31 | 17 | 55% |
-| master | no-load | 8 | 4 | 50% |
-| tmon-filternak | no-load | 8 | 4 | 50% |
+| bundled | no-load | 33 | 18 | 55% |
+| master | no-load | 24 | 11 | 46% |
+| tmon-filternak | no-load | 24 | 12 | 50% |
 | bundled | no-load + drain-wait | 16 | 0 | 0% |
 | master | no-load + drain-wait | 17 | 0 | 0% |
 | tmon-filternak | no-load + drain-wait | 16 | 0 | 0% |
@@ -90,7 +96,7 @@ Hit rate per (gateware × condition). Regenerated from `results/manifest.jsonl`:
 | tmon-filternak | reload + drain-wait | 1 | 0 | 0% |
 | | | | | |
 | **all** | **reload** | **24** | **0** | **0%** |
-| **all** | **no-load** | **47** | **25** | **53%** |
+| **all** | **no-load** | **81** | **41** | **51%** |
 | **all** | **no-load + drain-wait** | **49** | **0** | **0%** |
 | **all** | **reload + drain-wait** | **4** | **0** | **0%** |
 <!-- END scenario-table -->
@@ -104,7 +110,10 @@ current git master; `tmon-filternak` = desowin's `tmon-nordic/filter-nak`
 branch. The no-load `bundled` cell is larger because it pools several batches,
 including the runs with the ramp signal playing (§3 "Confirmation") — that is
 the same scenario, only the playback payload differs. Rows captured against a
-disconnected DUT (near-zero reframed bytes) are dropped.*
+disconnected DUT (near-zero reframed bytes) are dropped. The `--filter-nak`
+vs dense experiment in the last chapter is **not** pooled here (regenerate with
+`--exclude-batch 20260905-whyfn15 --exclude-batch 20260905-whyfilternak`): its
+dense conditions are a different question and its captures are only 15 s.*
 
 ### Observations
 
@@ -359,13 +368,15 @@ case: its seam is at byte 263, there is essentially no stale block, and the ramp
 is continuous throughout — exactly what H predicts when the ring was nearly
 empty at session start.
 
-The ~48 s is consistent between the two runs, which suggests it is a
-characteristic amount of timeline the ring holds — consistent with the previous
-session's SDRAM sink continuing to write and wrap the ring after its client
-detached, so the ring's contents span far more elapsed time than its 16 MiB
-size alone.
-
-*(More ramp captures are being collected; this table will grow.)*
+The ~48 s is consistent between these two runs. It is **not** one ring's worth
+of data: at the `--filter-nak` wire rate (~12 MB/s here) the 16 MiB ring holds
+only ~1.4 s. The stale block is a *frozen tail* — the last ~1–2 s the previous
+session's SDRAM sink wrote before its `CSTREAM_CFG` disable — and the ~48 s is
+its **age**: the wall-clock gap between the previous run's teardown and this
+run's start (its reframe, the FPGA preload, setup). The shorter-capture runs in
+the next chapter make this explicit: with 15 s captures and a ~15–25 s
+inter-run gap the same jump shrinks to ~12–13 s, tracking the gap rather than
+staying at 48 s.
 
 ---
 
@@ -377,6 +388,110 @@ un-cleared SDRAM ring, catches up to the live write position. It is an
 initialisation problem — no gateware timing fault is involved. The fix belongs
 at start-up (empty/clear the ring on capture-enable, in gateware or client),
 not in the framer.
+
+The chapter below answers the remaining question — why the desync is only ever
+*seen* with `--filter-nak`, when the dirty ring is there in every mode — and
+narrows the fix accordingly.
+
+## Why the desync needs `--filter-nak`
+
+The desync is a start-of-session artifact: the reader begins on the previous
+session's un-cleared ring and runs until it catches the live writer. That stale
+block is present no matter what the client asks the gateware to filter — so why
+does the framer only lose lock when `--filter-nak` is set?
+
+`--filter-nak` does two things at once: it thins the stream, and it removes one
+class of regularly-spaced packet. To separate those, three no-load conditions
+were run on the bundled gateware — 12 captures each, 15 s each (every desync
+onsets in the first ~1.3 s, so a long capture adds nothing), ramp playing
+throughout, **zero** kernel packet drops in any run (so a dense-stream break is
+real, not a `usbmon` artifact):
+
+| client flags | stream | offline desync | `HF0_FIRST` seen | mean `HF0_OVF`/run |
+|---|---|--:|--:|--:|
+| `--filter-nak` | sparse | **6 / 12** | 6 / 12 | ~730 |
+| *(none)* | dense (NAK storm kept) | **2 / 12** | 1 / 12 | ~5,400 |
+| `--filter-sof` | dense, SOFs dropped | **5 / 12** | 2 / 12 | ~8,600 |
+
+*(This is a separate experiment from the scenario table in §2 — different
+capture length, and the dense conditions are not part of that matrix.)*
+
+### The stale block is there in every mode
+
+Ramp decode at the seam of the desynced runs, all three conditions:
+
+| run | condition | ramp jump across the seam | pre-seam earlier? |
+|---|---|--:|:--:|
+| `205750Z` | `--filter-nak` | +12.3 s | yes |
+| `205947Z` | `--filter-nak` | +13.2 s | yes |
+| `210144Z` | `--filter-nak` | +12.3 s | yes |
+| `210348Z` | *(none)* | +21.6 s | yes |
+| `210953Z` | *(none)* | +23.9 s | yes |
+| `212031Z` | `--filter-sof` | +36.0 s | yes |
+
+In every case the pre-seam ramp values are *earlier* on the timeline than the
+post-seam ones — the bytes before the seam are a previous session's data, in
+every filter mode. (The jump is ~12–13 s here versus ~48 s for the 240 s
+captures above: it scales with the inter-run wall-clock gap, as the frozen-tail
+reading predicts.) The ring is never clean at session start. What differs by
+mode is whether the framer recovers.
+
+### What lets the framer recover: `HF0_FIRST`, and a steady packet cadence
+
+Across all 36 runs the gateware's session-start marker predicts the outcome:
+
+| | clean | desync |
+|---|--:|--:|
+| `HF0_FIRST` present | 8 | 1 |
+| `HF0_FIRST` absent | 15 | 12 |
+
+A run that sees `HF0_FIRST` frames cleanly (8/9); a run that starts past it is a
+coin-flip.
+
+In the `--filter-nak` runs the split is total and has a fixed signature:
+
+- **clean run** — `HF0_FIRST` present; `HF0_OVF` (~1,100) confined to the back
+  half of the capture.
+- **desynced run** — no `HF0_FIRST`; `HF0_OVF` (~200–440) confined to Q1, then
+  nothing for the rest of the capture.
+
+and the 12 runs alternate clean/desync almost perfectly — each run's outcome is
+set by the ring state its predecessor left behind.
+
+Put together: the reader starts mid-stale-block, past this session's
+`HF0_FIRST`. It burst-drains the stale bytes — that burst is the Q1 `HF0_OVF`
+spike — then meets the live writer, misaligned. In a `--filter-nak` stream there
+is now nothing to realign it: `HF0_FIRST` is gone, the thinned stream no longer
+overflows (no more `HF0_OVF` resync markers), and genuine frame boundaries are
+sparse. The misalignment rides until the framer re-locks on its own — a
+macroscopic span. That is the desync.
+
+### The dense streams mask it
+
+The no-filter condition desyncs 2/12, and those two look different: `HF0_OVF`
+7,000–11,000 *ramping up* through the capture, not a Q1 spike. That is the OV3's
+SDRAM path saturating under the full unfiltered load — a throughput failure,
+self-flagged by the `HF0_OVF` markers it generates and recovered from. It is not
+the stale-ring seam (though the seam is still there — the ramp jumps +21–24 s).
+A dense stream re-establishes framing almost immediately: a continuous cadence
+of SOF and NAK packets gives the framer known-shape anchors byte-to-byte, and
+every `HF0_OVF` is a resync point. A bad start self-corrects inside Q1.
+
+Dropping SOF packets from the dense stream (`--filter-sof` only) pushes the rate
+back up to 5/12, toward the sparse level. At N = 12 that is only suggestive
+(2 vs 5, p ≈ 0.2), but it is consistent with the reading that *regular packet
+cadence*, SOF or NAK, is what normally holds the framer in lock across the
+stale-block seam. Take both away — `--filter-nak`, which also leaves the
+post-drain stream too thin to overflow — and the seam is exposed.
+
+### Bearing on the fix
+
+This does not change the conclusion, it narrows it. The desync is a start-up
+problem: the ring is dirty and the reader is turned loose on it before
+`HF0_FIRST`. `--filter-nak` does not cause it — it removes every mechanism that
+was papering over it. A start-up fix (clear the ring on capture-enable, or make
+the client hunt for a frame boundary / `HF0_FIRST` before it trusts the stream)
+covers every filter mode at once.
 
 ## Tooling
 

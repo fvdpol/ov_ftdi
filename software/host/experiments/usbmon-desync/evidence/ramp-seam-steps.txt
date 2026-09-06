@@ -20,3 +20,24 @@ previous session's data, read straight off the wire. The ~48 s is consistent
 between the two, suggesting a characteristic amount of timeline the 16 MiB ring
 holds (the previous session's SDRAM sink kept writing and wrapping it after its
 client detached).
+
+--- whyfn15 batch (2026-09-05): 15s captures, 3 filter conditions, bundled gw ---
+decode_out_ramp.py at the seam of the desynced runs. Every one: pre-seam ramp
+value is EARLIER on the timeline than post-seam -> a previous sessions data,
+
+--- whyfn15 batch (2026-09-05): 15s captures, 3 filter conditions, bundled gw ---
+decode_out_ramp.py at the seam of the desynced runs. Every one: pre-seam ramp
+value is EARLIER on the timeline than post-seam, i.e. a previous session's data,
+in every filter mode. Jump ~12-13s here vs ~48s for the 240s captures: it
+tracks the inter-run wall-clock gap (frozen-tail reading).
+
+run       condition        seam jump    pre-seam earlier
+205750Z   --filter-nak     +12.3 s      yes
+205947Z   --filter-nak     +13.2 s      yes
+210144Z   --filter-nak     +12.3 s      yes
+210348Z   (no filter)      +21.6 s      yes
+210953Z   (no filter)      +23.9 s      yes
+212031Z   --filter-sof     +36.0 s      yes
+
+Offline desync rate: --filter-nak 6/12, no filter 2/12, --filter-sof 5/12.
+HF0_FIRST present: 8/9 clean. HF0_FIRST absent: 12/27 desync.

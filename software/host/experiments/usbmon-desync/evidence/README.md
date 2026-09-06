@@ -45,3 +45,18 @@ for tooling.
 `../decode_out_ramp.py` output for the ramp runs: the decoded ramp value each
 side of the seam, and the step across it. This is the direct confirmation that
 the pre-seam bytes are a previous session's data.
+
+## whyfn15 experiment ("Why the desync needs `--filter-nak`" chapter)
+
+`manifest.jsonl` also carries the 36 rows of batches `20260905-whyfn15`
+(15 s captures, 3 filter conditions) and the 5 stray `20260905-whyfilternak`
+240 s rows. These are **excluded from the report's §2 scenario table**
+(`gen_report_tables.py --exclude-batch 20260905-whyfn15 --exclude-batch
+20260905-whyfilternak`) and summarised in the last chapter instead.
+
+- `ovctl-20260905T205750Z_inner_blip_16145112` — a `--filter-nak` desync from
+  that batch; the ramp decode across this seam jumps +12.3 s (see
+  `ramp-seam-steps.txt`).
+
+Per-run `HF0_FIRST` / `HF0_OVF` detail is derived live from each
+`results/<tag>.reframe.json`; it is not snapshotted here.
