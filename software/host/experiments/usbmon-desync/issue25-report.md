@@ -115,13 +115,19 @@ vs dense experiment in the last chapter is **not** pooled here (regenerate with
 `--exclude-batch 20260905-whyfn15 --exclude-batch 20260905-whyfilternak`): its
 dense conditions are a different question and its captures are only 15 s.*
 
+*Run accounting: the manifest holds **217** captures in total; this table
+aggregates the **158** that are `--filter-nak` runs of the reload / no-load /
+drain-wait conditions. The other 59 are out of its scope — 41 from the
+`--filter-nak`-vs-dense experiment (last chapter), 16 exploratory dense *reload*
+probes, one 30 s sizing probe, and one disconnected-DUT capture.*
+
 ### Observations
 
 1. **The desync only occurs when the FPGA was not reconfigured before the run.**
-   0/24 with reload, 25/47 (53%) without. Every reload cell is clean.
+   0/24 with reload, 41/81 (51%) without. Every reload cell is clean.
 2. **Making the previous session drain cleanly eliminates it.** 0/49 no-load
    runs desync when the prior session waited for `HF0_LAST` before tearing down
-   the SDRAM path, versus 25/47 (53%) without that wait. The priming
+   the SDRAM path, versus 41/81 (51%) without that wait. The priming
    reload+drain runs are counted in the table and are also clean.
 3. **The three gateware builds behave the same.** Same ~50% no-load rate on
    each; reload and drain-wait clean on each. None of the gateware differences
