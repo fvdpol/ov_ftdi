@@ -125,6 +125,67 @@ against a case that should obviously be nonzero before trusting it.
 alsa-test (now passwordless-sudo scoped, `/etc/sudoers.d/claude-ovbisect`) -- 75/75 rows
 reprocessed against the current `reframe.py`, 0 missing pcap, no hardware re-run needed.
 
+## Register probe at session start (2026-09-09)
+
+`do_sniff` was instrumented (opt-in `OV25_*` env vars, `8f617cc`) to dump the
+capture-engine registers -- `wptr`/`rptr` via the atomic `SDRAM_SINK_PTR_READ`
+snapshot, plus `SDRAM_SINK_GO`/`SDRAM_HOST_READ_GO` and `CSTREAM_CFG` -- at each
+step of init: `on entry` (before any register write), `after GO=0`, `after
+RING_BASE`, `after GO=1`, then repeatedly during a 2 s hold with capture still
+disabled, then `after CFG=5`. Five `ovctl.py sniff hs --filter-nak --format
+pcap` sessions were run back to back with the DUT streaming a continuous duplex
+load, a usbmon capture of the host<->FTDI link taken in parallel with each, and
+`HF0_FIRST` located by direct byte scan of the inner stream. Raw dumps and the
+marker scan: `evidence/20260909-register-probe/`. N = 5, one gateware, one
+sitting; consistent with an earlier standalone pair.
+
+**Confirmed -- the `GO=1` edge does reset the pointers, empirically (not just
+from the RTL, hypothesis A).** Runs that entered with a non-zero `wptr`/`rptr`
+(the previous session's last value, e.g. `0x002b3fc5`) read `0` or a few
+hundred words `after GO=1`. Hypothesis (A) is not where the desync originates.
+
+**Confirmed -- hypothesis (B)'s premise, for a predecessor that did not exit
+cleanly.** `on entry`:
+
+| previous session ended by | `cfg` on entry | `go` on entry | producer state |
+|---|---|---|---|
+| normal `--timeout` / Ctrl-C | `0` | `0/0` | idle (`rx` stays 0 through init) |
+| SIGKILL / SIGTERM / crash | `5` (bit0 `ena` + bit2 filter-nak) | `1/1` | **already running** -- `rx` is already in the millions on entry and climbs at every step |
+
+So `do_sniff`'s `finally: CSTREAM_CFG.wr(0)` does clear the enable on a normal
+exit, and (B)'s "`ena` already active when the next session's `GO` edge fires"
+holds specifically after a kill/crash. `do_sniff` never re-clears `CSTREAM_CFG`
+anywhere in init, so nothing stops the inherited producer. Caveat: `after GO=1`
+in these runs shows small non-zero pointers (~`0x150ce`), consistent with the
+still-live producer writing in the sub-ms between the edge and the register
+read -- plausible, not independently pinned down.
+
+**Confirmed -- the missing `HF0_FIRST` is missing *on the wire*, with a cause
+(extends "Session markers" above).** Direct scan of the parallel usbmon inner
+stream, not the reprocessed manifest: the three clean-entry runs carry
+`HF0_FIRST` at frame #0 / #6 / #7 (frames #6/#7 sitting right after the previous
+session's `HF0_LAST`); the two killed-predecessor runs have **no `HF0_FIRST`
+anywhere** in 50-60 MB / 400-500k frames, and no `HF0_LAST` either. `HF0_FIRST`
+is the `ena & ~en_last` edge (`producer.py`); a session that inherits `ena = 1`
+never produces that edge, so the marker is never stuffed and LibOV's
+`got_start` gate keeps the client framer from ever locking.
+
+**Not shown here -- this series does not re-measure the stale data.** `rx` is a
+byte counter on the host consumer; it says bytes are arriving, not whether they
+are live or read back out of SDRAM. The `+48 s` ramp jump in `issue25-report`
+§3 remains the evidence that the pre-seam bytes predate the session. The
+pointer reset firing is not in tension with that: `GO=1` moves the pointers but
+does not touch the ring's contents or `CSTREAM_CFG`, so a reader turned loose
+from `~0` still crosses the previous session's bytes before it reaches the live
+write position.
+
+**Bearing on the fix.** Clearing `CSTREAM_CFG` at the *start* of `do_sniff`,
+before the `GO` edges, restores the `ena` edge and the marker -- in a run that
+did exactly that, `rx` stopped climbing immediately and the sniff pcap came
+back to full size. That addresses the missing marker / framer lock, but not the
+stale ring contents; the teardown drain (below) is still what empties those.
+The two fixes cover different halves.
+
 ## Why does no-load only *sometimes* fail? -- two candidate mechanisms
 
 ### (A) SDRAM ring pointer reset -- traced, does NOT explain it (ruled out as stated)
@@ -134,7 +195,9 @@ full reload, so it starts reading stale/leftover ring content. **Checked directl
 the RTL and this is wrong as literally stated:** both `sdram_host_read.py`
 (`If(go &~ gor, rptr.eq(ring_base))`) and `sdram_sink.py` (identical construct for `wptr`)
 reset their respective pointers to `ring_base` on their own `GO` 0->1 edge -- reload or not.
-The pointers themselves are not stale.
+The pointers themselves are not stale. **Also confirmed empirically** (2026-09-09 register
+probe, above): every run reads `wptr`/`rptr` at `~0` immediately `after GO=1`, including
+runs that entered with the pointers at millions of words.
 
 ### (B) GO-write ordering race -- a hypothesis with a premise that isn't confirmed yet
 
@@ -166,7 +229,11 @@ identified yet. **Before building the GO-reordering fix, the cheap, direct check
 `CSTREAM_CFG`'s live value at the very start of a fresh no-load `setup()`, before writing
 anything to it, across a number of no-load runs -- if it reads 0 every time as expected,
 this hypothesis's premise fails and the reordering experiment isn't worth running as
-currently framed. **Not yet done.**
+currently framed. **Done (2026-09-09, see "Register probe at session start" above): it
+reads `0` after a clean exit but `5` (with the producer already running) after a
+SIGKILL/SIGTERM/crash.** So the premise fails for the normal case and holds for an
+uncleanly-terminated predecessor -- which is also exactly the condition under which
+`HF0_FIRST` goes missing.
 
 ## Drain-wait experiment -- DONE, positive result
 
@@ -264,12 +331,13 @@ events) once run across more samples.
    result so far.
 2. Port `DRAIN_WAIT` (or the equivalent teardown fix) into `ovctl.py` itself -- the actual
    client our main matrix and any eventual upstream fix would use, not just `mincapture.py`.
+   Pair it with a `CSTREAM_CFG=0` write at the *start* of `do_sniff` (before the `GO`
+   edges) -- the 2026-09-09 probe shows these fix different halves (marker vs stale ring).
 3. ~~`sudo python3 reprocess.py` to backfill the FIRST/LAST marker fields across all 64
    main-matrix runs~~ -- **DONE 2026-09-04**, 75/75 rows, see Session markers section above
    for the resulting full-scale numbers. The CSTREAM_CFG-at-setup-start diagnostic
-   (hypothesis B) will also passively accumulate data on any future `mincapture.py` run now
-   that it's built in -- check it opportunistically, no dedicated experiment needed unless
-   drain-wait's result doesn't hold up under more N.
+   (hypothesis B) is now **done** -- see "Register probe at session start (2026-09-09)":
+   `0` after a clean exit, `5` (producer running) after a kill/crash.
 4. ~~Run the SOF-gap real-vs-inflated check on the HF0_OVF events at scale~~ -- **DONE
    2026-09-04**, see Overflow mechanism section above.
 5. Resolve the `ovf_csr` vs `ovf_pcap` discrepancy on no-load cells -- now confirmed solid at
@@ -279,4 +347,6 @@ events) once run across more samples.
    with elapsed time -- see "Open question: why does the visible framing break wait for
    millions of packets?" above. Needed to know whether the framing break and the missing
    FIRST marker are actually the same root cause or just correlated.
-7. Fold all of the above into the next #25 reply.
+7. ~~Fold all of the above into the next #25 reply.~~ -- **DONE 2026-09-09**, posted, with
+   the 2026-09-09 register-probe series as a run-by-run block. Startup USB bus disturbance
+   split off into its own issue (#26).

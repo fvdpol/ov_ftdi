@@ -1,0 +1,21 @@
+scan_first_marker.py / framedetail.py on the parallel usbmon capture of each run
+(dumpcap -i usbmon1, converted to classic pcap with editcap -F pcap).
+"frame #N @byte B" = index/byte-offset of the 0xA0 frame carrying flags & 0x10
+(HF0_FIRST) in the reassembled inner (whacker/rxcsniff) stream.
+
+run   entry cfg/go   inner stream            HF0_FIRST                       HF0_LAST (prev session tail)
+----  ------------   --------------------    ---------------------------    ---------------------------
+run1  0   / 0/0      72,805,184 B/622,385f  frame #0  @byte 0              -
+run2  0   / 0/0      72,873,138 B/622,962f  frame #6  @byte 562           frame #5 @byte 556
+run3  0   / 0/0      23,274,938 B/198,974f  frame #7  @byte 570           frame #6 @byte 564
+run4  5   / 1/1      58,689,182 B/501,703f  NOT PRESENT (whole stream)    not present
+run5  5   / 1/1      48,908,444 B/418,091f  NOT PRESENT (whole stream)    not present
+
+run1 = fresh FPGA config (-l), terminated cleanly (ovctl --timeout).
+run2 = terminated cleanly.
+run3 = terminated with SIGKILL mid-session (enters clean; leaves CSTREAM_CFG/GO set).
+run4 = terminated with SIGKILL; enters after run3's kill.
+run5 = terminated with SIGKILL; enters after run4's kill.
+
+(An earlier standalone pair on the JT-PCM-008 stream gave the same result:
+clean entry -> FIRST@byte 0; killed-predecessor entry -> FIRST absent across 101 MB.)
