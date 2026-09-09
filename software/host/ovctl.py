@@ -260,6 +260,101 @@ def sdramtest(dev):
 sniff_speeds = ["hs", "fs", "ls"]
 sniff_formats = ["verbose", "custom", "pcap", "iti1480a"]
 
+# ---------------------------------------------------------------------------
+# ov_ftdi issue #25 instrumentation.
+#
+# All of this is opt-in through the environment; with none of the variables
+# set, do_sniff behaves exactly as it did before.
+#
+#   OV25_PROBE=1               dump the capture engine's state at each step of
+#                              the SDRAM init sequence
+#   OV25_PRECAPTURE_DELAY=2.0  seconds to wait between the GO edges and the
+#                              CSTREAM_CFG enable, counting the bytes the board
+#                              sends during that window
+#   OV25_CLEAR_CSTREAM=1       write CSTREAM_CFG=0 before the GO edges
+#   OV25_PROBE_OUT=<path>      append probe output here instead of stderr
+# ---------------------------------------------------------------------------
+
+OV25_PROBE = os.getenv('OV25_PROBE') == '1'
+OV25_CLEAR_CSTREAM = os.getenv('OV25_CLEAR_CSTREAM') == '1'
+OV25_PRECAPTURE_DELAY = float(os.getenv('OV25_PRECAPTURE_DELAY') or 0)
+
+
+class _OV25Probe:
+    """Read back the capture engine's own state without disturbing it."""
+
+    def __init__(self, dev):
+        self.dev = dev
+        self.rows = []
+        self.out = sys.stderr
+        path = os.getenv('OV25_PROBE_OUT')
+        if path:
+            self.out = open(path, 'a')
+
+        # Count the raw bytes the board sends up the SDRAM read stream. Hooked
+        # before the first register write so that nothing is missed.
+        self.stream_bytes = 0
+        self.stream_packets = 0
+        self.first_byte_at = None
+        svc = dev.sdram_read.service
+        inner = svc.consume
+
+        def counting_consume(b):
+            if self.first_byte_at is None:
+                self.first_byte_at = time.time()
+            self.stream_bytes += len(b)
+            self.stream_packets += 1
+            return inner(b)
+
+        svc.consume = counting_consume
+
+    def ptrs(self):
+        # The write to PTR_READ *is* the trigger: it pulses .re, which latches
+        # wptr and rptr in the same cycle (ovhw/sdram_sink.py:29-35). Reading
+        # the shadow registers without writing this first returns whatever was
+        # latched last time.
+        self.dev.regs.SDRAM_SINK_PTR_READ.wr(0)
+        return (self.dev.regs.SDRAM_SINK_WPTR.rd(),
+                self.dev.regs.SDRAM_SINK_RPTR.rd())
+
+    def dump(self, tag):
+        r = self.dev.regs
+        wptr, rptr = self.ptrs()
+        row = {
+            'tag': tag,
+            't': time.time(),
+            'wptr': wptr,
+            'rptr': rptr,
+            'sink_go': r.SDRAM_SINK_GO.rd(),
+            'hr_go': r.SDRAM_HOST_READ_GO.rd(),
+            'cstream_cfg': r.CSTREAM_CFG.rd(),
+            'sink_base': r.SDRAM_SINK_RING_BASE.rd(),
+            'sink_end': r.SDRAM_SINK_RING_END.rd(),
+            'hr_base': r.SDRAM_HOST_READ_RING_BASE.rd(),
+            'hr_end': r.SDRAM_HOST_READ_RING_END.rd(),
+            'wrap_count': r.SDRAM_SINK_WRAP_COUNT.rd(),
+            'rx_bytes': self.stream_bytes,
+        }
+        self.rows.append(row)
+        print("[ov25] %-16s wptr=%08x rptr=%08x go=%d/%d cfg=%x "
+              "base=%08x/%08x end=%08x/%08x wrap=%d rx=%d" % (
+                  tag, row['wptr'], row['rptr'], row['sink_go'], row['hr_go'],
+                  row['cstream_cfg'], row['sink_base'], row['hr_base'],
+                  row['sink_end'], row['hr_end'], row['wrap_count'],
+                  row['rx_bytes']),
+              file=self.out, flush=True)
+        return row
+
+    def summary(self):
+        import json
+        print("[ov25-json] " + json.dumps({
+            'rows': self.rows,
+            'precapture_bytes': self.stream_bytes,
+            'precapture_packets': self.stream_packets,
+            'first_byte_at': self.first_byte_at,
+        }), file=self.out, flush=True)
+
+
 def do_sniff(dev, speed, format, out, timeout, debug_filter, filter_nak, filter_sof, fs_pre):
     # LEDs off
     dev.regs.LEDS_MUX_2.wr(0)
@@ -273,14 +368,33 @@ def do_sniff(dev, speed, format, out, timeout, debug_filter, filter_nak, filter_
     ring_base = 0
     ring_size = 16 * 1024 * 1024
     ring_end = ring_base + ring_size
+    probe = _OV25Probe(dev) if (OV25_PROBE or OV25_PRECAPTURE_DELAY) else None
+    if probe:
+        # Before any write: the only point that still shows what the previous
+        # session left behind.
+        probe.dump("on entry")
+
+    if OV25_CLEAR_CSTREAM:
+        # do_sniff never clears this at init; only the teardown does, and the
+        # teardown does not run if the previous client was killed.
+        dev.regs.CSTREAM_CFG.wr(0)
+        if probe:
+            probe.dump("after CFG=0")
+
     dev.regs.SDRAM_SINK_GO.wr(0)
     dev.regs.SDRAM_HOST_READ_GO.wr(0)
+    if probe:
+        probe.dump("after GO=0")
     dev.regs.SDRAM_SINK_RING_BASE.wr(ring_base)
     dev.regs.SDRAM_SINK_RING_END.wr(ring_end)
     dev.regs.SDRAM_HOST_READ_RING_BASE.wr(ring_base)
     dev.regs.SDRAM_HOST_READ_RING_END.wr(ring_end)
+    if probe:
+        probe.dump("after RING_BASE")
     dev.regs.SDRAM_SINK_GO.wr(1)
     dev.regs.SDRAM_HOST_READ_GO.wr(1)
+    if probe:
+        probe.dump("after GO=1")
 
     # clear perfcounters
     dev.regs.OVF_INSERT_CTL.wr(1)
@@ -338,7 +452,21 @@ def do_sniff(dev, speed, format, out, timeout, debug_filter, filter_nak, filter_
 
     elapsed_time = 0
     try:
+        if OV25_PRECAPTURE_DELAY:
+            # Capture is still disabled here. If the pointer reset works the
+            # reader is blocked (rptr == wptr) and the board has nothing to
+            # send, so any bytes counted in this window are not from this
+            # session.
+            deadline = time.time() + OV25_PRECAPTURE_DELAY
+            while time.time() < deadline:
+                time.sleep(0.2)
+                if probe:
+                    probe.dump("pre-capture")
+        if probe:
+            probe.summary()
         dev.regs.CSTREAM_CFG.wr(cfg)
+        if probe:
+            probe.dump("after CFG=%x" % cfg)
         while 1:
             dev.regs.SDRAM_SINK_PTR_READ.wr(0)
             dev.regs.OVF_INSERT_CTL.wr(0)
