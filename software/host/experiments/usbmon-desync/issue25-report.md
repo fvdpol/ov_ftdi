@@ -247,7 +247,7 @@ checked and, if wrong, shown wrong. Each was gathered before the ramp test that
 ultimately confirmed it ("Confirmation", below) — they are the indicators that
 pointed there, and they are worth keeping as an independent line of support.
 
-> **H: when the sniff session starts, the SDRAM capture ring is not empty. The
+> **Hypothesis: when the sniff session starts, the SDRAM capture ring is not empty. The
 > host reads out the previous session's left-over bytes first, fast, until the
 > reader catches up to where the current session is now writing. The visible
 > "desync" is that seam.**
@@ -260,7 +260,7 @@ pointed there, and they are worth keeping as an independent line of support.
    stale re-read in place either. The magnitude is the tell: rather than one
    capture with a gap, this is the stream **switching source** at a point — the
    pre-onset bytes and the post-onset bytes come from different fills of the
-   ring (**H**), and the SOF jump is the wall-clock distance between them, not
+   ring (**Hypothesis**), and the SOF jump is the wall-clock distance between them, not
    traffic lost inside one session. So on the original loss-vs-extra-data axis
    the answer is *inconclusive*; the size of the gap is what pushes past it.
    **Falsified by:** a duplicate-bytes signature at the onset; SOF continuity
@@ -335,13 +335,13 @@ pointed there, and they are worth keeping as an independent line of support.
 ### Confirmation — a known ramp signal in the OUT stream
 
 The observations above are all inference from timing. This test turns the
-question into a direct read, and it **confirms H**.
+question into a direct read, and it **confirms Hypothesis**.
 
 **Method.** The OV3 sniffs both directions of the DUT's USB traffic, so a known
 pattern played *to* the DUT lands in the capture as decodable OUT data packets,
 giving the stream a ground-truth serial number it otherwise lacks. We play a
 24-bit linear ramp (S24, sample value = sample index mod 2²⁴, same on every
-channel) into the DUT via one **continuous** `aplay -D hw:<dut>` at 96 kHz,
+channel) "Saw-wave" into the DUT via one **continuous** `aplay -D hw:<dut>` at 96 kHz,
 native format, spanning the whole run of sniff sessions — a free-running,
 wrap-counted absolute timeline. Offline, the OUT DATA packets are pulled from
 the reframed stream and the DUT's S24↔on-wire bit-plane transform is inverted
@@ -399,7 +399,7 @@ The chapter below answers the remaining question — why the desync is only ever
 *seen* with `--filter-nak`, when the dirty ring is there in every mode — and
 narrows the fix accordingly.
 
-## Why the desync needs `--filter-nak`
+## Why did we only start seeing the the desync after enabling `--filter-nak`?
 
 The desync is a start-of-session artifact: the reader begins on the previous
 session's un-cleared ring and runs until it catches the live writer. That stale
